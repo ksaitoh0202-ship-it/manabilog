@@ -367,6 +367,10 @@ th{font-weight:500;color:var(--ink-2)}
 .tgh[aria-expanded=true] .tgv{transform:rotate(90deg)}
 .tgp{padding-left:4px}
 @media (prefers-reduced-motion: reduce){.tgh .tgv{transition:none}}
+
+/* ===== テスト分析(きろくタブ) ===== */
+.tah{font:700 14px/1.4 var(--f-disp);margin:22px 0 8px}
+.tabody td .linkbtn{padding:4px 6px;font-size:13px}
 </style>
 
 <div class="wrap">
@@ -527,7 +531,7 @@ const S={
   tab:'timer', range:14, finishing:null, lastResult:null, logLimit:40, exportText:'', tagEdit:null
 };
 function saveStore(){
-  const data={v:1,sessions:S.sample?[]:S.sessions,goalMin:S.goalMin,timer:S.timer,units:S.units,tags:SUBJECTS,board:S.board,bsample:S.bsample,routines:S.routines,rsample:S.rsample,checks:S.checks};
+  const data={v:1,sessions:S.sample?[]:S.sessions,goalMin:S.goalMin,timer:S.timer,units:S.units,tags:SUBJECTS,board:S.board,bsample:S.bsample,routines:S.routines,rsample:S.rsample,checks:S.checks,tests:S.tests};
   try{localStorage.setItem(KEY,JSON.stringify(data));}catch(e){S.storageOk=false;}
 }
 try{localStorage.setItem(KEY+'.t','1');localStorage.removeItem(KEY+'.t');}catch(e){S.storageOk=false;}
@@ -641,6 +645,22 @@ function normChecks(o){
   Object.keys(o).forEach(k=>{if(keep.has(k)&&Array.isArray(o[k])) out[k]=o[k].filter(x=>typeof x==='string').slice(0,60);});
   return out;
 }
+function normTests(arr){
+  if(!Array.isArray(arr)) return [];
+  const out=[];
+  arr.slice(0,300).forEach(x=>{
+    if(!x||typeof x!=='object') return;
+    const name=cutStr(x.name,30), sj=cutStr(x.subject,20);
+    if(!name||!sj||!okYmd(x.date)) return;
+    const fl=Number(x.full), full=(fl>0&&fl<=1000)?fl:100;
+    if(x.score===''||x.score==null) return;
+    const sc=Number(x.score); if(!(sc>=0&&sc<=full)) return;
+    const av=(x.avg===''||x.avg==null)?null:Number(x.avg), dv=(x.dev===''||x.dev==null)?null:Number(x.dev);
+    out.push({id:cutStr(x.id,30)||bid(),name:name,subject:sj,date:x.date,score:sc,full:full,
+      avg:(av!=null&&av>=0&&av<=full)?av:null,dev:(dv!=null&&dv>0&&dv<=100)?dv:null});
+  });
+  return out;
+}
 function makeBoardSample(){
   const tk=(name,items,done,due)=>({id:bid(),name:name,due:due||null,open:false,items:mkItems(items,done)});
   return {subjects:[
@@ -666,6 +686,7 @@ function makeRoutineSample(){
   if(nr&&!stored.rsample){S.routines=nr;S.rsample=false;}
   else{S.routines=makeRoutineSample();S.rsample=true;}
   S.checks=normChecks(stored.checks);
+  S.tests=normTests(stored.tests);
 })();
 
 /* ---------- 進捗計算 ---------- */
@@ -1889,6 +1910,319 @@ function heatCard(){
     h('div',{class:'legend'},h('span',{text:'少ない'}),h('span',{class:'sw'},[0,1,2,3,4,5].map(i=>h('i',{style:'background:var(--h'+i+')'}))),h('span',{text:'多い(30分ごとに1段階)'})));
 }
 
+/* ---------- テスト分析(きろくタブ) ---------- */
+const TA={open:null,sel:'',win:14,form:null,card:null,charts:[]};
+const taBlank=()=>({id:'',name:'',date:dkey(Date.now()),subject:'',score:'',full:'100',avg:'',dev:''});
+const taNum=n=>String(Math.round(n*10)/10);
+const taSd=d=>Math.abs(d)<0.05?'±0':(d>0?'+':'−')+taNum(Math.abs(d));
+function taGroups(){
+  const m=new Map();
+  S.tests.forEach(t=>{
+    const k=normName(t.name); let g=m.get(k);
+    if(!g){g={key:k,name:t.name,date:t.date,list:[]};m.set(k,g);}
+    g.list.push(t); if(t.date>g.date) g.date=t.date;
+  });
+  return [...m.values()].sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);
+}
+function taSubjMatch(a,b){
+  const x=normName(a), y=normName(b);
+  return x===y||(x.length>=2&&y.length>=2&&(x.includes(y)||y.includes(x)));
+}
+function taMinutes(t){
+  if(S.sample) return null;
+  const from=addDays(ymdMs(t.date),-(TA.win-1)), end=addDays(ymdMs(t.date),1);
+  return Math.round(sum(S.sessions.filter(x=>{
+    if(x.start<from||x.start>=end) return false;
+    const tg=tagOf(x.subject);
+    return taSubjMatch(tg.subj||tg.name,t.subject);
+  }),x=>x.min));
+}
+function taPrev(t){
+  const n=normName(t.subject); let best=null;
+  S.tests.forEach(o=>{if(o.id!==t.id&&normName(o.subject)===n&&o.date<t.date&&(!best||o.date>best.date)) best=o;});
+  return best;
+}
+function taMeanDev(list){const d=list.filter(x=>x.dev!=null);return d.length?sum(d,x=>x.dev)/d.length:null;}
+function taInsights(g,prevG){
+  const out=[], L=g.list, wd=L.filter(x=>x.dev!=null);
+  if(wd.length>=2){
+    const s2=wd.slice().sort((a,b)=>b.dev-a.dev), hi=s2[0], lo=s2[s2.length-1];
+    if(hi.dev-lo.dev>=0.05){
+      out.push({tag:'得意・苦手',text:'偏差値がいちばん高いのは「'+hi.subject+'」('+taNum(hi.dev)+')、いちばん低いのは「'+lo.subject+'」('+taNum(lo.dev)+')で、差は '+taNum(hi.dev-lo.dev)+' です。'});
+      const ml=taMinutes(lo), mh=taMinutes(hi);
+      if(ml!=null&&mh!=null) out.push({tag:'勉強時間',text:'テストまでの'+TA.win+'日間の勉強は、「'+lo.subject+'」が '+fmtMin(ml)+'、「'+hi.subject+'」が '+fmtMin(mh)+' でした。'});
+    }
+  }
+  if(L.some(x=>x.avg!=null)){
+    const below=L.filter(x=>x.avg!=null&&x.score<x.avg);
+    out.push({tag:'平均点',text:below.length?'平均点より低かった教科: '+below.map(x=>x.subject+'('+taSd(x.score-x.avg)+'点)').join('、')+'。':'平均点が入っている教科は、すべて平均点以上でした。'});
+  }
+  if(prevG){
+    const a=taMeanDev(L), b=taMeanDev(prevG.list);
+    if(a!=null&&b!=null) out.push({tag:'前回のテスト',text:'平均偏差値は「'+prevG.name+'」の '+taNum(b)+' から '+taNum(a)+' に変わりました('+taSd(a-b)+')。受けた教科がちがうと比べにくいので、目安として見てください。'});
+  }
+  const ch=[];
+  L.forEach(x=>{const p=taPrev(x);if(p&&x.dev!=null&&p.dev!=null) ch.push({x:x,p:p,d:x.dev-p.dev});});
+  if(ch.length){
+    const so=ch.slice().sort((a,b)=>b.d-a.d), up=so[0], dn=so[so.length-1], parts=[];
+    if(up.d>=0.05) parts.push('「'+up.x.subject+'」が '+taSd(up.d)+'(前回「'+up.p.name+'」から。いちばん上がった教科)');
+    if(dn.d<=-0.05) parts.push('「'+dn.x.subject+'」が '+taSd(dn.d)+'(いちばん下がった教科)');
+    out.push({tag:'同じ教科の前回比',text:parts.length?'偏差値は '+parts.join('、')+'。':'同じ教科の前回のテストと、偏差値はほぼ同じでした。'});
+    const pr=[];
+    ch.forEach(c=>{const a=taMinutes(c.x), b=taMinutes(c.p); if(a!=null&&b!=null) pr.push({c:c,dm:a-b});});
+    const more=pr.filter(z=>z.dm>0), less=pr.filter(z=>z.dm<0), bits=[];
+    if(more.length) bits.push('勉強時間が前回より増えた'+more.length+'教科のうち、偏差値が上がったのは'+more.filter(z=>z.c.d>0).length+'教科');
+    if(less.length) bits.push('減った'+less.length+'教科のうち、偏差値が上がったのは'+less.filter(z=>z.c.d>0).length+'教科');
+    if(bits.length) out.push({tag:'勉強時間',text:bits.join('、')+'です。'});
+  }
+  if(!out.length) out.push({tag:'はじめに',text:'2教科以上、または2回以上のテスト結果を入れると、くらべる分析が出ます。'});
+  out.push({tag:'見かた',text:'教科や回数が少ないうちは、たまたまの影響が大きくなります。勉強時間との関係は、目安として見てください。'});
+  return out;
+}
+function drawDevBars(box,rows){
+  const w=box.clientWidth,H=232,m={l:40,r:8,t:22,b:44},iw=w-m.l-m.r,ih=H-m.t-m.b;
+  const vs=rows.filter(r=>r.dev!=null).map(r=>r.dev);
+  const lo=Math.min(40,Math.floor((Math.min(...vs)-5)/10)*10), hi=Math.max(60,Math.ceil((Math.max(...vs)+5)/10)*10);
+  const y=v=>m.t+ih-(v-lo)/(hi-lo)*ih;
+  const svg=s('svg',{width:w,height:H,viewBox:'0 0 '+w+' '+H,role:'img','aria-label':'教科ごとの偏差値。50が平均です。'});
+  for(let v=lo;v<=hi;v+=10){
+    svg.append(s('line',{x1:m.l,x2:w-m.r,y1:y(v),y2:y(v),class:v===50?'axis':'grid'}),
+      s('text',{x:m.l-7,y:y(v)+4,'text-anchor':'end',class:'tick',text:String(v)}));
+  }
+  const slot=iw/rows.length, bw=Math.min(28,slot*.5), mc=Math.max(2,Math.floor(slot/11));
+  rows.forEach((r,i)=>{
+    const cx=m.l+slot*(i+.5);
+    if(r.dev!=null){
+      const ye=y(r.dev);
+      svg.append(s('path',{d:barPath(cx,bw,y(50),ye,4),style:'fill:'+(r.dev>=50?'var(--hi)':'var(--dim)')}),
+        s('text',{x:cx,y:r.dev>=50?ye-6:ye+15,'text-anchor':'middle',class:'vlab halo',text:taNum(r.dev)}));
+    }else svg.append(s('text',{x:cx,y:y(50)-6,'text-anchor':'middle',class:'xs',text:'—'}));
+    svg.append(s('text',{x:cx,y:H-m.b+18,'text-anchor':'middle',class:'xl',text:r.name.length>mc?r.name.slice(0,mc):r.name}));
+    const hit=s('rect',{x:m.l+slot*i,y:m.t,width:slot,height:ih,class:'hit',tabindex:'0',role:'img','aria-label':r.name+' '+(r.dev!=null?'偏差値'+taNum(r.dev):'偏差値なし')});
+    attachTip(hit,()=>{
+      const rs=[];
+      if(r.dev!=null) rs.push({color:r.dev>=50?'var(--hi)':'var(--dim)',label:'偏差値',value:taNum(r.dev)});
+      rs.push({label:'点数',value:taNum(r.score)+'/'+taNum(r.full)});
+      if(r.avg!=null) rs.push({label:'平均点',value:taNum(r.avg)});
+      if(r.min!=null) rs.push({label:'勉強時間',value:fmtMin(r.min)});
+      return {title:r.name,rows:rs};
+    });
+    svg.append(hit);
+  });
+  box.replaceChildren(svg);
+}
+function drawTrend(box,asc,series){
+  const w=box.clientWidth,H=244,m={l:40,r:14,t:16,b:50},iw=w-m.l-m.r,ih=H-m.t-m.b,n=asc.length,pad=Math.min(26,iw/(2*n));
+  const all=[]; series.forEach(z=>z.vals.forEach(v=>{if(v!=null) all.push(v);}));
+  const lo=Math.min(40,Math.floor((Math.min(...all)-3)/10)*10), hi=Math.max(60,Math.ceil((Math.max(...all)+3)/10)*10);
+  const x=i=>m.l+pad+(iw-2*pad)*(n===1?.5:i/(n-1)), y=v=>m.t+ih-(v-lo)/(hi-lo)*ih;
+  const svg=s('svg',{width:w,height:H,viewBox:'0 0 '+w+' '+H,role:'img','aria-label':'テストごとの偏差値の推移。50が平均です。'});
+  for(let v=lo;v<=hi;v+=10){
+    svg.append(s('line',{x1:m.l,x2:w-m.r,y1:y(v),y2:y(v),class:v===50?'axis':'grid'}),
+      s('text',{x:m.l-7,y:y(v)+4,'text-anchor':'end',class:'tick',text:String(v)}));
+  }
+  series.forEach(z=>{
+    let d=''; z.vals.forEach((v,i)=>{if(v==null) return; d+=((i>0&&z.vals[i-1]!=null)?'L':'M')+x(i)+','+y(v);});
+    svg.append(s('path',{d:d,fill:'none',style:'stroke:'+z.color,'stroke-width':z.dash?'1.5':'2.25','stroke-dasharray':z.dash?'5 4':null,'stroke-linejoin':'round','stroke-linecap':'round'}));
+  });
+  series.forEach(z=>z.vals.forEach((v,i)=>{
+    if(v==null) return;
+    svg.append(s('circle',{cx:x(i),cy:y(v),r:z.dash?3:4,class:'pt',style:'fill:'+z.color}));
+  }));
+  const slot=iw/n, mc=Math.max(3,Math.floor(slot/11));
+  asc.forEach((gr,i)=>{
+    const d=new Date(ymdMs(gr.date));
+    svg.append(s('text',{x:x(i),y:H-m.b+18,'text-anchor':'middle',class:'xl',text:gr.name.length>mc?gr.name.slice(0,mc):gr.name}),
+      s('text',{x:x(i),y:H-m.b+32,'text-anchor':'middle',class:'xs',text:(d.getMonth()+1)+'/'+d.getDate()}));
+    const hit=s('rect',{x:x(i)-slot/2,y:m.t,width:slot,height:ih,class:'hit',tabindex:'0',role:'img','aria-label':gr.name});
+    attachTip(hit,()=>({title:gr.name,rows:series.filter(z=>z.vals[i]!=null).map(z=>({color:z.color,label:z.name,value:taNum(z.vals[i])}))}));
+    svg.append(hit);
+  });
+  box.replaceChildren(svg);
+}
+function taDrawAll(){
+  TA.charts.forEach(c=>{const b=c[0];if(b.isConnected&&b.clientWidth>0&&b._w!==b.clientWidth){b._w=b.clientWidth;c[1](b);}});
+}
+function taRefresh(focusId){
+  const old=TA.card; if(!old||!old.isConnected) return;
+  const nn=taCard(); old.replaceWith(nn);
+  if(focusId){const el=document.getElementById(focusId);if(el)try{el.focus();}catch(e){}}
+}
+function taEdit(t){
+  TA.form={id:t.id,name:t.name,date:t.date,subject:t.subject,score:String(t.score),full:String(t.full),avg:t.avg==null?'':String(t.avg),dev:t.dev==null?'':String(t.dev)};
+  TA.open=true; taRefresh();
+  try{TA.card.querySelector('details').scrollIntoView({block:'nearest',behavior:'smooth'});}catch(e){}
+}
+function taSave(){
+  const f=TA.form, name=f.name.trim(), sj=f.subject.trim();
+  const full=f.full===''?100:Number(f.full), sc=f.score===''?NaN:Number(f.score);
+  const av=f.avg===''?null:Number(f.avg), dv=f.dev===''?null:Number(f.dev);
+  if(!name){toast('テストの名前を入れてください(例:二学期中間)');return;}
+  if(!okYmd(f.date)){toast('テストが終わった日を入れてください');return;}
+  if(ymdMs(f.date)>startOfDay(Date.now())){toast('これからの日付は入れられません');return;}
+  if(!sj){toast('教科を入れてください');return;}
+  if(!(full>0&&full<=1000)){toast('満点は1〜1000の数で入れてください');return;}
+  if(!(sc>=0&&sc<=full)){toast('点数は0〜満点の間で入れてください');return;}
+  if(av!=null&&!(av>=0&&av<=full)){toast('平均点は0〜満点の間で入れてください');return;}
+  if(dv!=null&&!(dv>0&&dv<=100)){toast('偏差値は0より大きく100以下で入れてください');return;}
+  const rec={id:f.id||bid(),name:name.slice(0,30),subject:sj.slice(0,20),date:f.date,score:sc,full:full,avg:av,dev:dv};
+  let msg='保存しました。続けて別の教科も入れられます';
+  if(f.id){
+    const i=S.tests.findIndex(x=>x.id===f.id);
+    if(i>=0) S.tests[i]=rec; else S.tests.push(rec);
+    msg='直しました';
+  }else{
+    const dup=S.tests.findIndex(x=>normName(x.name)===normName(rec.name)&&normName(x.subject)===normName(rec.subject));
+    if(dup>=0){rec.id=S.tests[dup].id;S.tests[dup]=rec;msg='同じテストの同じ教科だったので、結果を更新しました';}
+    else{
+      if(S.tests.length>=300){toast('結果は300件までです。古いものを消してください');return;}
+      S.tests.push(rec);
+    }
+  }
+  TA.sel=normName(rec.name); TA.open=true; saveStore();
+  const wasEdit=!!f.id;
+  TA.form=Object.assign(taBlank(),{name:rec.name,date:rec.date});
+  taRefresh(wasEdit?null:'taSj');
+  toast(msg);
+}
+function taDue(){
+  if(S.bsample) return null;
+  const L=S.board.subjects.filter(sb=>sb.due&&daysToYmd(sb.due)<0&&!S.tests.some(t=>t.date>=sb.due&&normName(t.subject)===normName(sb.name)));
+  if(!L.length) return null;
+  return h('div',{class:'linkbox',style:'margin-bottom:14px'},
+    h('div',{style:'font-weight:700;font-family:var(--f-disp)',text:'テスト進捗の期限がすぎた教科'}),
+    h('p',{class:'note',text:'タップすると、教科と期限の日付が入ります。'}),
+    h('div',{class:'chips',style:'margin-top:8px'},L.slice(0,8).map(sb=>h('button',{type:'button',class:'chip',on:{click:()=>{
+      TA.form=Object.assign(taBlank(),{subject:sb.name.slice(0,20),date:sb.due,name:(TA.form&&TA.form.name)||''});
+      TA.open=true; taRefresh('taName');
+    }}},sb.name+'('+fmtMD(sb.due)+')'))));
+}
+function taForm(){
+  const f=TA.form, ed=!!f.id;
+  const inp=(id,label,key,attrs)=>h('div',{},h('label',{class:'l',for:id,text:label}),
+    h('input',Object.assign({id:id,value:f[key],on:{input:e=>{f[key]=e.target.value;}}},attrs)));
+  const chipBox=h('div',{class:'chips',style:'margin-top:8px'});
+  const drawChips=()=>chipBox.replaceChildren(...subjectList().slice(0,14).map(n=>{
+    const on=normName(n)===normName(f.subject);
+    return h('button',{type:'button',class:'chip'+(on?' on':''),'aria-pressed':String(on),on:{click:()=>{f.subject=n;const el=document.getElementById('taSj');if(el)el.value=n;drawChips();}}},n);
+  }));
+  drawChips();
+  const names=taGroups().map(g=>g.name);
+  return h('div',{},
+    h('div',{class:'row'},
+      inp('taName','テストの名前','name',{type:'text',maxlength:'30',placeholder:'例:二学期中間',list:'taNames',autocomplete:'off'}),
+      inp('taDate','テストが終わった日','date',{type:'date'})),
+    h('div',{class:'l',text:'教科'}),
+    h('input',{id:'taSj',type:'text',maxlength:'20',value:f.subject,placeholder:'例:国語',list:'taSubs',autocomplete:'off','aria-label':'教科',on:{input:e=>{f.subject=e.target.value;drawChips();}}}),
+    chipBox,
+    h('div',{class:'row',style:'margin-top:4px'},
+      inp('taScore','点数','score',{type:'number',min:'0',step:'any',inputmode:'decimal'}),
+      inp('taFull','満点','full',{type:'number',min:'1',step:'any',inputmode:'decimal'})),
+    h('div',{class:'row'},
+      inp('taAvg','平均点(なくてもOK)','avg',{type:'number',min:'0',step:'any',inputmode:'decimal'}),
+      inp('taDev','偏差値(なくてもOK)','dev',{type:'number',min:'0',max:'100',step:'any',inputmode:'decimal'})),
+    h('p',{class:'note',style:'margin-top:8px',text:'平均点と偏差値は、成績表などに書いてあれば入れます。同じテストの名前で、教科ごとに1つずつ入れていきます。'}),
+    h('div',{class:'btns'},
+      h('button',{type:'button',class:'btn pri',on:{click:taSave}},ed?'直して保存':'この教科を保存'),
+      ed?h('button',{type:'button',class:'btn',on:{click:()=>{TA.form=taBlank();taRefresh();}}},'やめる'):null),
+    h('datalist',{id:'taNames'},names.map(n=>h('option',{value:n}))),
+    h('datalist',{id:'taSubs'},subjectList().map(n=>h('option',{value:n}))));
+}
+function taBody(box){
+  TA.charts=[]; box.replaceChildren();
+  const G=taGroups();
+  if(!G.length){
+    box.append(h('p',{class:'empty',text:'まだテストの結果がありません。上のフォームから入れると、ここに分析が出ます。'}));
+    return;
+  }
+  const gi=Math.max(0,G.findIndex(x=>x.key===TA.sel)), g=G[gi], prevG=G[gi+1]||null; TA.sel=g.key;
+  const order=subjectList().map(normName), ix=t=>{const i=order.indexOf(normName(t.subject));return i<0?99:i;};
+  const rows=g.list.slice().sort((a,b)=>ix(a)-ix(b)||(a.subject<b.subject?-1:1));
+  const sel=h('div',{class:'chips',role:'radiogroup','aria-label':'見るテスト'},G.map(x=>h('button',{type:'button',class:'chip'+(x.key===g.key?' on':''),role:'radio','aria-checked':String(x.key===g.key),on:{click:()=>{TA.sel=x.key;taBody(box);}}},x.name)));
+  const tot=sum(rows,x=>x.score), fullT=sum(rows,x=>x.full), wa=rows.filter(x=>x.avg!=null), md=taMeanDev(rows);
+  const tile=(a,b,u)=>h('div',{class:'tile'},h('div',{class:'a',text:a}),h('div',{class:'b'},b,u?h('small',{text:u}):null));
+  const tiles=h('div',{class:'tiles'},
+    tile('受けた教科',String(rows.length),'教科'),
+    tile('合計点',taNum(tot),'/ '+taNum(fullT)),
+    tile('平均点との差',wa.length?taSd(sum(wa,x=>x.score-x.avg)):'—',wa.length?'点':''),
+    tile('平均偏差値',md!=null?taNum(md):'—',''));
+  const th=t=>h('th',{text:t});
+  const tbl=h('div',{class:'tscroll'},h('table',{},
+    h('thead',{},h('tr',{},th('教科'),th('点数'),th('平均点'),th('差'),th('偏差値'),th('勉強時間'),th(''))),
+    h('tbody',{},rows.map(t=>{
+      const df=t.avg!=null?t.score-t.avg:null, mn=taMinutes(t);
+      return h('tr',{},
+        h('td',{text:t.subject}),
+        h('td',{text:taNum(t.score)+(t.full!==100?'/'+taNum(t.full):'')}),
+        h('td',{text:t.avg!=null?taNum(t.avg):'—'}),
+        h('td',{text:df!=null?taSd(df):'—',style:df==null?null:'color:'+(df>=0?'var(--ok)':'var(--bad)')}),
+        h('td',{text:t.dev!=null?taNum(t.dev):'—'}),
+        h('td',{text:mn!=null?fmtMin(mn):'—'}),
+        h('td',{},
+          h('button',{type:'button',class:'linkbtn',on:{click:()=>taEdit(t)}},'直す'),
+          h('button',{type:'button',class:'linkbtn',on:{click:function(){
+            if(this.dataset.arm==='1'){S.tests=S.tests.filter(x=>x.id!==t.id);saveStore();taRefresh();return;}
+            this.dataset.arm='1';this.textContent='もう一度押すと削除';
+            setTimeout(()=>{this.dataset.arm='0';this.textContent='削除';},3500);
+          }}},'削除')));
+    }))));
+  const win=h('div',{class:'seg',role:'group','aria-label':'勉強時間をみる期間'},[7,14,30].map(n=>h('button',{type:'button','aria-pressed':String(TA.win===n),on:{click:()=>{TA.win=n;taBody(box);}}},n+'日')));
+  const ins=taInsights(g,prevG);
+  /* 偏差値の棒グラフ */
+  const devRows=rows.map(t=>({name:t.subject,dev:t.dev,score:t.score,full:t.full,avg:t.avg,min:taMinutes(t)}));
+  let devBlock=null;
+  if(devRows.some(r=>r.dev!=null)){
+    const dbox=h('div',{class:'chart'}); dbox._w=0;
+    TA.charts.push([dbox,b=>drawDevBars(b,devRows)]);
+    devBlock=[h('h3',{class:'tah',text:'教科ごとの偏差値(50が平均)'}),dbox];
+  }
+  /* 推移 */
+  const asc=G.slice().reverse(), names=[];
+  asc.forEach(gr=>gr.list.forEach(t=>{const k=normName(t.subject);if(!names.some(z=>z.k===k)) names.push({k:k,name:t.subject});}));
+  const series=names.map((nm,i)=>({name:nm.name,color:subjColor(nm.name)||PRESET_COLORS[i%PRESET_COLORS.length],
+    vals:asc.map(gr=>{const t=gr.list.find(x=>normName(x.subject)===nm.k&&x.dev!=null);return t?t.dev:null;})})).filter(z=>z.vals.filter(v=>v!=null).length>=2);
+  const mean=asc.map(gr=>{const d=gr.list.filter(x=>x.dev!=null);return d.length>=2?sum(d,x=>x.dev)/d.length:null;});
+  if(mean.filter(v=>v!=null).length>=2) series.push({name:'全教科の平均',color:'var(--ink)',dash:true,vals:mean});
+  let trendBlock;
+  if(series.length&&asc.length>=2){
+    const tbox=h('div',{class:'chart'}); tbox._w=0;
+    TA.charts.push([tbox,b=>drawTrend(b,asc,series)]);
+    trendBlock=[h('h3',{class:'tah',text:'偏差値の推移(テストごと)'}),
+      h('div',{class:'leg'},series.map(z=>h('span',{},h('i',{style:'background:'+z.color}),z.name))),tbox];
+  }else trendBlock=[h('h3',{class:'tah',text:'偏差値の推移(テストごと)'}),h('p',{class:'note',text:'同じ教科で、偏差値を入れたテストが2回以上になると、ここに推移が出ます。'})];
+  const delAll=h('div',{style:'margin-top:18px'},h('button',{type:'button',class:'btn sm danger',on:{click:function(){
+    if(this.dataset.arm==='1'){S.tests=S.tests.filter(x=>normName(x.name)!==g.key);TA.sel='';saveStore();taRefresh();return;}
+    this.dataset.arm='1';this.classList.add('armed');this.textContent='もう一度押すと、このテストの結果がすべて消えます';
+    setTimeout(()=>{this.dataset.arm='0';this.classList.remove('armed');this.textContent='このテストの結果をすべて削除';},3500);
+  }}},'このテストの結果をすべて削除'));
+  box.append(...[
+    h('div',{class:'l',text:'見るテスト'}),sel,
+    tiles,
+    h('h3',{class:'tah',text:'教科ごとの結果'}),tbl,
+    h('div',{style:'display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:10px'},
+      h('span',{class:'note',text:'勉強時間は、テストの日までの'}),win,h('span',{class:'note',text:'に「きろく」へ入れた、同じ教科の合計です。'})),
+    h('h3',{class:'tah',text:'記録から見えること'}),
+    h('ul',{class:'ins'},ins.map(i=>h('li',{},h('span',{class:'tag',text:i.tag}),h('span',{text:i.text})))),
+    devBlock,trendBlock,delAll
+  ].flat().filter(Boolean));
+  requestAnimationFrame(taDrawAll);
+}
+function taCard(){
+  if(!TA.form) TA.form=taBlank();
+  const ed=!!TA.form.id, body=h('div',{class:'tabody'});
+  const isOpen=TA.open==null?!S.tests.length:TA.open;
+  const det=h('details',{class:'fold',open:isOpen},
+    h('summary',{text:ed?'テスト結果を直す':'テスト結果を入れる'}),h('div',{},taForm()));
+  det.addEventListener('toggle',()=>{TA.open=det.open;});
+  const card=h('div',{class:'card'},
+    h('h2',{text:'テスト分析'}),
+    h('p',{class:'sub',text:'テストが終わった教科の「テストの名前・点数・平均点・偏差値」を入れると、教科ごとの比べ方や、勉強時間との関係がわかります。'}),
+    taDue(),det,body);
+  TA.card=card;
+  taBody(body);
+  return card;
+}
+
 /* ---------- LOG TAB ---------- */
 function renderLog(){
   const root=$('#p-log'); root.replaceChildren();
@@ -1987,7 +2321,7 @@ function renderLog(){
     setTimeout(()=>{this.dataset.arm='0';this.textContent='記録をすべて消す';},3500);
   }}},'記録をすべて消す');
   const backup=h('div',{class:'card'},h('h2',{text:'バックアップ'}),
-    h('p',{class:'note',text:'記録は、いま使っているこの端末のブラウザに保存されます。端末を変えるときや、先生に見せるときは書き出してください。'}),
+    h('p',{class:'note',text:'記録は、いま使っているこの端末のブラウザに保存されます。端末を変えるときや、先生に見せるときは書き出してください。テスト分析の結果もJSONに入ります。'}),
     !S.storageOk?h('p',{class:'warn',text:'このブラウザでは保存できないため、ページを閉じると記録が消えます。'}):null,
     h('div',{class:'row',style:'margin-top:12px'},
       h('button',{type:'button',class:'btn sm',on:{click:()=>exportData('json')}},'書き出す(JSON)'),
@@ -1998,7 +2332,8 @@ function renderLog(){
       h('div',{},pasteBox,h('div',{class:'btns'},h('button',{type:'button',class:'btn sm',on:{click:()=>{importData(pasteBox.value);}}},'読み込む')))),
     h('div',{style:'margin-top:14px'},wipe));
 
-  root.append(h('div',{class:'sgrid'},h('div',{class:'card'},h('h2',{text:'記録を足す'}),manual),list,backup));
+  root.append(h('div',{class:'sgrid'},h('div',{class:'card'},h('h2',{text:'記録を足す'}),manual),taCard(),list,backup));
+  requestAnimationFrame(taDrawAll);
 }
 
 function csvCell(v){
@@ -2007,12 +2342,13 @@ function csvCell(v){
   return '"'+t.replace(/"/g,'""')+'"';
 }
 function exportData(kind){
-  if(S.sample){toast('まだ自分の記録がありません');return;}
+  if(S.sample&&!S.tests.length){toast('まだ自分の記録がありません');return;}
   let text,name;
   if(kind==='json'){
-    text=JSON.stringify({app:'manabilog',v:1,exported:new Date().toISOString(),goalMin:S.goalMin,tags:SUBJECTS,sessions:S.sessions,board:S.bsample?undefined:boardCompact(),routines:S.rsample?undefined:S.routines});
+    text=JSON.stringify({app:'manabilog',v:1,exported:new Date().toISOString(),goalMin:S.goalMin,tags:SUBJECTS,sessions:S.sample?[]:S.sessions,board:S.bsample?undefined:boardCompact(),routines:S.rsample?undefined:S.routines,tests:S.tests});
     name='manabilog-backup.json';
   }else{
+    if(S.sample){toast('まだ自分の記録がありません');return;}
     const rows=[['日付','開始時刻','教科','タスク','メモ','時間(分)','量','単位','集中度','ひとこと']];
     S.sessions.slice().sort((a,b)=>a.start-b.start).forEach(x=>{
       const d=new Date(x.start);
@@ -2021,17 +2357,13 @@ function exportData(kind){
     text='﻿'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n');
     name='manabilog.csv';
   }
-  if(DL){
-    DL.save({filename:name,data:text}).then(()=>toast('保存しました')).catch(e=>{
-      if(e&&e.code==='declined') return;
-      S.exportText=text;renderLog();
-    });
-  }else{S.exportText=text;renderLog();}
+  S.exportText=text;renderLog();
 }
 function importData(text){
   try{
     const o=JSON.parse(text); const arr=Array.isArray(o)?o:o.sessions;
     if(!Array.isArray(arr)) throw new Error('bad');
+    let nt=0;
     if(!Array.isArray(o)&&Array.isArray(o.tags)){
       o.tags.forEach(tg=>{
         if(!validTag(tg)||SUBJ[tg.id]||SUBJECTS.length>=20) return;
@@ -2055,6 +2387,14 @@ function importData(text){
         const have2=new Set(S.routines.map(sig));
         nrt.forEach(r=>{if(!SUBJ[r.subject]||S.routines.length>=40||have2.has(sig(r)))return;have2.add(sig(r));S.routines.push(r);});
       }
+      const tsts=normTests(o.tests);
+      const tk=t=>normName(t.name)+'|'+normName(t.subject);
+      const haveT=new Set(S.tests.map(tk)), haveId=new Set(S.tests.map(t=>t.id));
+      tsts.forEach(t=>{
+        if(S.tests.length>=300||haveT.has(tk(t))) return;
+        if(haveId.has(t.id)) t.id=bid();
+        haveT.add(tk(t)); haveId.add(t.id); S.tests.push(t); nt++;
+      });
     }
     const have=new Set(S.sample?[]:S.sessions.map(x=>x.id));
     let n=0; const base=S.sample?[]:S.sessions.slice();
@@ -2068,8 +2408,9 @@ function importData(text){
       base.push({id:id,start:start,min:min,subject:sid,task:String(x.task||'').slice(0,60),amount:Math.max(0,Number(x.amount)||0),unit:UNITS.indexOf(x.unit)>=0?x.unit:tagOf(sid).unit,focus:Math.max(0,Math.min(5,Math.round(Number(x.focus)||0))),note:String(x.note||'').slice(0,80)});
       n++;
     });
-    S.sessions=base;S.sample=false;saveStore();renderBanner();renderLog();
-    toast(n+'件を読み込みました');
+    if(n||!S.sample){S.sessions=base;S.sample=false;}
+    saveStore();renderBanner();renderLog();
+    toast(n+'件を読み込みました'+(nt?'(テスト結果'+nt+'件も)':''));
   }catch(e){toast('読み込めませんでした。書き出したJSONファイルを選んでください');}
 }
 
@@ -2367,7 +2708,7 @@ document.addEventListener('visibilitychange',()=>{
 });
 let rz=0;
 if(window.ResizeObserver){
-  new ResizeObserver(()=>{cancelAnimationFrame(rz);rz=requestAnimationFrame(()=>{if(S.tab==='stats') drawAll();});}).observe($('.wrap'));
+  new ResizeObserver(()=>{cancelAnimationFrame(rz);rz=requestAnimationFrame(()=>{if(S.tab==='stats') drawAll(); else if(S.tab==='log') taDrawAll();});}).observe($('.wrap'));
 }
 
 /* ---------- boot ---------- */
