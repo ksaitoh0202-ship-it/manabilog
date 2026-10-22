@@ -370,6 +370,17 @@ th{font-weight:500;color:var(--ink-2)}
 
 /* ===== テスト分析(きろくタブ) ===== */
 .tah{font:700 14px/1.4 var(--f-disp);margin:22px 0 8px}
+.stk{margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
+.sub+.stk{margin-top:0;padding-top:0;border-top:0}
+.stk-h{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:6px}
+.stk-n{font:700 28px/1.2 var(--f-body);white-space:nowrap}
+.stk-n small{font-size:14px;font-weight:500;margin-left:2px;color:var(--ink-2)}
+.gapb{margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.gapl li{font-size:13px;padding:4px 0;color:var(--ink-2)}
+.alertbox{margin-top:14px;padding:12px 14px;border:2px solid var(--ink);border-radius:12px;background:var(--surface-2);font-weight:700}
+.recbox{margin-bottom:14px;padding:12px 14px;border:1px solid var(--line-2);border-radius:12px;background:var(--surface-2)}
+.recrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line)}
+.recrow:last-child{border-bottom:0}
 .tabody td .linkbtn{padding:4px 6px;font-size:13px}
 </style>
 
@@ -526,12 +537,12 @@ const S={
   sessions:Array.isArray(stored.sessions)?stored.sessions:[],
   goalMin:stored.goalMin>0?stored.goalMin:120,
   timer:Object.assign(defaultTimer(),stored.timer||{}),
-  units:stored.units||{},
+  units:stored.units||{},limitAlert:stored.limitAlert!==false,wdAll:false,rec:null,
   sample:false, storageOk:true,
   tab:'timer', range:14, finishing:null, lastResult:null, logLimit:40, exportText:'', tagEdit:null
 };
 function saveStore(){
-  const data={v:1,sessions:S.sample?[]:S.sessions,goalMin:S.goalMin,timer:S.timer,units:S.units,tags:SUBJECTS,board:S.board,bsample:S.bsample,routines:S.routines,rsample:S.rsample,checks:S.checks,tests:S.tests};
+  const data={v:1,sessions:S.sample?[]:S.sessions,goalMin:S.goalMin,timer:S.timer,units:S.units,tags:SUBJECTS,board:S.board,bsample:S.bsample,routines:S.routines,rsample:S.rsample,checks:S.checks,tests:S.tests,limitAlert:S.limitAlert};
   try{localStorage.setItem(KEY,JSON.stringify(data));}catch(e){S.storageOk=false;}
 }
 try{localStorage.setItem(KEY+'.t','1');localStorage.removeItem(KEY+'.t');}catch(e){S.storageOk=false;}
@@ -1466,16 +1477,17 @@ function todayMin(){
 }
 function startTimer(){
   const t=S.timer; ensureAudio(); S.lastResult=null;
-  if(t.status==='idle'){t.accMs=0;t.sessionStart=Date.now();}
+  if(t.status==='idle'){t.accMs=0;t.sessionStart=Date.now();T.al=0;S.rec=null;}
   t.status='running';t.startedAt=Date.now();
   saveStore();lockScreen();renderTimer();
 }
 function pauseTimer(){
   const t=S.timer; t.accMs=elapsedMs();t.status='paused';
+  if(T.al===1) T.al=2;
   saveStore();unlockScreen();renderTimer();
 }
 function resetTimer(){
-  const t=S.timer; t.status='idle';t.accMs=0;t.startedAt=0;t.sessionStart=0;
+  const t=S.timer; t.status='idle';t.accMs=0;t.startedAt=0;t.sessionStart=0;T.al=0;
   S.finishing=null;saveStore();unlockScreen();renderTimer();
 }
 function openFinish(){
@@ -1501,7 +1513,7 @@ function saveFinish(){
   const ln=applyLink(t.subject,f.link);
   S.lastResult=makeResult(rec);
   if(ln.n) S.lastResult.push('テスト進捗「'+ln.name+'」の確認項目を'+ln.n+'件、完了にしました。(残り'+ln.left+'件)');
-  t.status='idle';t.accMs=0;t.startedAt=0;t.sessionStart=0;t.task='';
+  t.status='idle';t.accMs=0;t.startedAt=0;t.sessionStart=0;t.task='';T.al=0;
   S.finishing=null;saveStore();unlockScreen();renderTimer();renderBanner();
   toast('記録しました');
 }
@@ -1774,6 +1786,7 @@ function renderTimer(){
   T.cap=h('div',{class:'ringcap'});
   T.state=h('div',{class:'state'});
   const ring=h('div',{class:'ring'},ringSvg,h('div',{class:'mid'},T.state,T.digits,T.cap));
+  T.alert=h('div',{class:'alertbox',role:'status','aria-live':'polite',hidden:true});
 
   let controls;
   if(f){
@@ -1822,6 +1835,8 @@ function renderTimer(){
   else if(S.tagEdit&&SUBJ[S.tagEdit]) editor=tagEditor(SUBJ[S.tagEdit],doneEdit);
   const left=h('div',{class:'card'},
     h('h2',{text:'いま取り組む'}),
+    idle?h('div',{style:'margin-bottom:12px'},h('button',{type:'button',class:'btn sm',on:{click:()=>{S.rec=recommendNow();renderTimer();}}},'迷ったら おすすめを見る')):null,
+    idle?recCard():null,
     h('div',{class:'l',text:'タスクタグ(教科ごと)'}),
     chips(t.subject,id=>{t.subject=id;S.tagEdit=null;saveStore();renderTimer();},()=>{S.tagEdit='new';renderTimer();},'timer'),
     editor,
@@ -1831,7 +1846,7 @@ function renderTimer(){
     TSH.open?tagSharePanel():null,
     h('label',{class:'l',for:'taskIn',text:'メモ(なくてもOK)'}),taskIn,dl,
     h('div',{class:'l',text:'はかり方'}),modeSeg,presets,
-    ring,controls);
+    ring,T.alert,controls,limitNote());
 
   /* right column */
   T.todayVal=h('div',{class:'big-today'});
@@ -1855,6 +1870,7 @@ function renderTimer(){
   right.append(todayTasksCard(),todayCard,heatCard());
 
   root.replaceChildren(h('div',{class:'grid2'},left,right));
+  paintAlert();
   updateTimerUI();
 }
 
@@ -1885,6 +1901,7 @@ function updateTimerUI(){
   T.meterFill.style.width=Math.min(100,tm/S.goalMin*100)+'%';
   T.todayMsg.className='msg'+(tm>=S.goalMin?' ok':'');
   T.todayMsg.textContent=tm>=S.goalMin?'目標を達成しました。':'目標まで あと'+fmtMin(Math.max(1,S.goalMin-tm))+'。';
+  checkLimit();
 }
 
 function heatCard(){
@@ -2594,6 +2611,327 @@ function makeInsights(R,E,LB,TB,from,today0){
   return out.slice(0,5);
 }
 
+/* ====================================================================
+   分析の拡張: ストリーク / 曜日別 / 集中度ギャップ / 限界時間 / おすすめ
+   ==================================================================== */
+const DOW_ORDER=[1,2,3,4,5,6,0];
+function xScope(){
+  const today0=startOfDay(Date.now()), all=withEff(S.sessions);
+  if(S.wdAll){
+    const first=all.length?Math.min(...all.map(x=>x.start)):today0;
+    return {list:all,from:startOfDay(first),today0:today0};
+  }
+  const from=addDays(today0,-(S.range-1));
+  return {list:all.filter(x=>x.start>=from&&x.start<addDays(today0,1)),from:from,today0:today0};
+}
+function scopeSeg(){
+  return h('div',{class:'seg',role:'group','aria-label':'分析の対象'},
+    h('button',{type:'button','aria-pressed':String(!S.wdAll),on:{click:()=>{S.wdAll=false;renderStats();}}},'直近'+S.range+'日'),
+    h('button',{type:'button','aria-pressed':String(!!S.wdAll),on:{click:()=>{S.wdAll=true;renderStats();}}},'全期間'));
+}
+function xHead(title){
+  return h('div',{style:'display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px'},
+    h('h2',{text:title,style:'margin:0'}),scopeSeg());
+}
+function insList(arr){
+  return h('ul',{class:'ins'},arr.map(i=>h('li',{},h('span',{class:'tag',text:i.tag}),h('span',{text:i.text}))));
+}
+
+/* ---------- ④ ストリーク&復元力 ---------- */
+function dayTable(){
+  const all=withEff(S.sessions), dm=dayMap(all), keys=[...dm.keys()].sort();
+  if(!keys.length) return [];
+  const today0=startOfDay(Date.now()), out=[];
+  for(let ms=ymdMs(keys[0]);ms<=today0;ms=addDays(ms,1)){
+    const o=dm.get(dkey(ms)), E=o?o.list.filter(x=>x.eff!=null):[];
+    out.push({ms:ms,total:o?o.min:0,eff:E.length?wavg(E):null});
+  }
+  return out;
+}
+function streakStats(days,pred){
+  const ok=days.map(pred), n=ok.length;
+  let cur=0, i=n-1;
+  if(i>=0&&!ok[i]) i--;
+  while(i>=0&&ok[i]){cur++;i--;}
+  let best=0, run=0;
+  ok.forEach(v=>{run=v?run+1:0;if(run>best) best=run;});
+  const gaps=[]; let miss=0, started=false;
+  ok.forEach((v,idx)=>{
+    if(v){if(started&&miss>0) gaps.push(miss);started=true;miss=0;}
+    else if(started&&idx!==n-1) miss++;
+  });
+  let away=0;
+  if(cur===0){let j=n-2;while(j>=0&&!ok[j]){away++;j--;}}
+  return {cur:cur,best:best,gapN:gaps.length,gapAvg:gaps.length?gaps.reduce((a,b)=>a+b,0)/gaps.length:null,away:away};
+}
+function streakCard(){
+  const days=dayTable();
+  const card=h('div',{class:'card'},h('h2',{text:'連続とたてなおし'}),
+    h('p',{class:'sub',text:'続けた日数と、できなかった日からどれくらいで戻れたかです。'}));
+  if(days.length<2){card.append(h('p',{class:'empty',text:'2日分以上の記録がたまると、ここに出ます。'}));return card;}
+  const kinds=[
+    {name:'勉強した日',p:d=>d.total>0},
+    {name:'目標時間を超えた日(1日'+S.goalMin+'分)',p:d=>d.total>=S.goalMin},
+    {name:'効率指数が100以上の日',p:d=>d.eff!=null&&d.eff>=100}
+  ];
+  const MS=[3,7,14,30,60,100];
+  kinds.forEach(k=>{
+    const r=streakStats(days,k.p), next=MS.find(m=>m>r.cur);
+    const parts=['いまの連続 '+r.cur+'日(最長 '+r.best+'日)。'];
+    if(next) parts.push('あと'+(next-r.cur)+'日で'+next+'日連続です。');
+    parts.push(r.gapN?'つまずいてから戻るまで、平均 '+fmtNum(r.gapAvg)+'日('+r.gapN+'回)。':'つまずいたあとに戻った記録は、まだありません。');
+    if(r.away>0) parts.push('いま'+r.away+'日あいています。');
+    card.append(h('div',{class:'stk'},
+      h('div',{class:'stk-h'},h('b',{text:k.name}),h('span',{class:'stk-n'},String(r.cur),h('small',{text:'日連続'}))),
+      next?h('div',{class:'meter'},h('i',{style:'width:'+Math.min(100,r.cur/next*100)+'%'})):null,
+      h('p',{class:'note',style:'margin-top:8px',text:parts.join('')}),
+      h('div',{class:'chips',style:'margin-top:8px'},MS.map(m=>h('span',{class:'chip'+(r.best>=m?' on':''),text:m+'日'+(r.best>=m?' ✓':'')})))));
+  });
+  card.append(h('p',{class:'note',style:'margin-top:14px',text:'効率指数が100以上の日は、量を入れた記録がある日だけが対象です。'}));
+  return card;
+}
+
+/* ---------- ① 曜日別パフォーマンス ---------- */
+function drawBars(box,rows){
+  const w=box.clientWidth,H=204,m={l:44,r:8,t:22,b:34},iw=w-m.l-m.r,ih=H-m.t-m.b;
+  const mx=Math.max(1,...rows.map(r=>r.v));
+  const steps=[10,15,30,60,120,180,300,600,1200,1800,3000,6000,12000,30000];
+  const step=steps.find(v=>mx/v<=4)||60000, top=Math.ceil(mx/step)*step;
+  const y=v=>m.t+ih-v/top*ih, tf=v=>step>=60?fmtNum(v/60)+'h':v+'分';
+  const svg=s('svg',{width:w,height:H,viewBox:'0 0 '+w+' '+H,role:'img','aria-label':'曜日ごとの総学習時間'});
+  for(let v=0;v<=top;v+=step){
+    svg.append(s('line',{x1:m.l,x2:w-m.r,y1:y(v),y2:y(v),class:v===0?'axis':'grid'}),
+      s('text',{x:m.l-7,y:y(v)+4,'text-anchor':'end',class:'tick',text:tf(v)}));
+  }
+  const slot=iw/rows.length, bw=Math.min(28,slot*.55);
+  rows.forEach((r,i)=>{
+    const cx=m.l+slot*(i+.5);
+    if(r.v>0){
+      svg.append(s('path',{d:barPath(cx,bw,y(0),y(r.v),4),style:'fill:var(--hi)'}),
+        s('text',{x:cx,y:y(r.v)-6,'text-anchor':'middle',class:'vlab halo',text:r.v>=60?fmtNum(r.v/60)+'h':Math.round(r.v)+'分'}));
+    }
+    svg.append(s('text',{x:cx,y:H-m.b+18,'text-anchor':'middle',class:'xl',text:r.k}));
+    const hit=s('rect',{x:m.l+slot*i,y:m.t,width:slot,height:ih,class:'hit',tabindex:'0',role:'img','aria-label':r.name+' '+fmtMin(r.v)});
+    attachTip(hit,()=>({title:r.name,rows:[{label:'総学習時間',value:fmtMin(r.v)},{label:'勉強した日',value:r.days+'日'},{label:'1日あたり',value:fmtMin(r.per)}]}));
+    svg.append(hit);
+  });
+  box.replaceChildren(svg);
+}
+function weekdayInsights(rows){
+  const out=[], used=rows.filter(r=>r.n>=3);
+  if(used.length<3){
+    out.push({tag:'はじめに',text:'曜日ごとの傾向は、量を入れた記録が3曜日以上で、それぞれ3回以上たまると出てきます。'});
+    return out;
+  }
+  const srt=used.slice().sort((a,b)=>b.eff-a.eff), best=srt[0], worst=srt[srt.length-1];
+  if(best.d!==worst.d&&best.eff-worst.eff>=5) out.push({tag:'曜日',text:WD[best.d]+'曜日がいちばん効率がよく(効率指数 '+Math.round(best.eff)+')、'+WD[worst.d]+'曜日がいちばん低くなっています('+Math.round(worst.eff)+')。'});
+  const grp=ds=>{
+    const L=rows.filter(r=>ds.includes(r.d)), Le=[].concat(...L.map(r=>r.list)), cal=sum(L,r=>r.cal);
+    return {n:Le.length,eff:Le.length?wavg(Le):null,per:cal?sum(L,r=>r.mins)/cal:0};
+  };
+  const we=grp([0,6]), wk=grp([1,2,3,4,5]);
+  if(we.n>=3&&wk.n>=3){
+    if(we.per>wk.per&&we.eff<=wk.eff-5) out.push({tag:'休日',text:'休日は1日あたり '+fmtMin(we.per)+' と、平日('+fmtMin(wk.per)+')より時間は取れていますが、効率指数は '+Math.round(we.eff)+' で平日の '+Math.round(wk.eff)+' より低く、だらけ気味かもしれません。'});
+    else if(we.eff>=wk.eff+5) out.push({tag:'休日',text:'休日の効率指数('+Math.round(we.eff)+')は、平日('+Math.round(wk.eff)+')より高くなっています。'});
+  }
+  let drop=null;
+  for(let i=1;i<rows.length;i++){
+    const a=rows[i-1], b=rows[i];
+    if(a.n>=3&&b.n>=3){const d=b.eff-a.eff; if(d<=-10&&(!drop||d<drop.d)) drop={a:a,b:b,d:d};}
+  }
+  if(drop) out.push({tag:'周期',text:WD[drop.a.d]+'曜日から'+WD[drop.b.d]+'曜日にかけて、効率指数が '+Math.abs(Math.round(drop.d))+' 下がっています。疲れが出やすい曜日かもしれません。'});
+  out.push({tag:'つかいみち',text:'疲れやすい曜日は、あらかじめ学習量を抑えておく。休日は、始める時間を変えて効率がどう変わるかを見てみる。'});
+  return out;
+}
+function weekdayCard(){
+  const sc=xScope(), E=sc.list.filter(x=>x.eff!=null), cal={};
+  DOW_ORDER.forEach(d=>{cal[d]=0;});
+  for(let ms=sc.from;ms<=sc.today0;ms=addDays(ms,1)) cal[new Date(ms).getDay()]++;
+  const rows=DOW_ORDER.map(d=>{
+    const L=sc.list.filter(x=>new Date(x.start).getDay()===d), Le=E.filter(x=>new Date(x.start).getDay()===d), mins=sum(L,x=>x.min);
+    return {d:d,cal:cal[d],days:new Set(L.map(x=>dkey(x.start))).size,mins:mins,per:cal[d]?mins/cal[d]:0,n:Le.length,eff:Le.length?wavg(Le):null,list:Le};
+  });
+  const card=h('div',{class:'card'},xHead('曜日ごとの傾向'),
+    h('p',{class:'sub',text:'月曜日〜日曜日ごとの総学習時間と、平均の効率指数(100がいつもの自分)です。'}));
+  if(!sc.list.length){card.append(h('p',{class:'empty',text:'この期間の記録がありません。'}));return card;}
+  const tbox=h('div',{class:'chart'}), ebox=h('div',{class:'chart'});
+  const bk=rows.map(r=>({k:WD[r.d],sub:r.days+'日',name:WD[r.d]+'曜日',n:r.n,mins:r.mins,eff:r.eff,show:r.n>=2}));
+  let best=-1,bv=103; bk.forEach((b,i)=>{if(b.n>=3&&b.eff>bv){bv=b.eff;best=i;}});
+  reg(tbox,b=>drawBars(b,rows.map(r=>({v:r.mins,name:WD[r.d]+'曜日',k:WD[r.d],days:r.days,per:r.per}))));
+  reg(ebox,b=>drawDiv(b,bk,best,'曜日'));
+  card.append(h('h3',{class:'tah',text:'総学習時間'}),tbox,
+    h('h3',{class:'tah',text:'平均の効率(いつもとの差)'}),ebox,
+    h('h3',{class:'tah',text:'見えること'}),insList(weekdayInsights(rows)));
+  return card;
+}
+
+/* ---------- ② 集中度と効率のギャップ ---------- */
+const FOC=[
+  {k:'1',sub:'ぼんやり',name:'集中度1',lo:1,hi:2},{k:'2',sub:'',name:'集中度2',lo:2,hi:3},{k:'3',sub:'',name:'集中度3',lo:3,hi:4},
+  {k:'4',sub:'',name:'集中度4',lo:4,hi:5},{k:'5',sub:'集中',name:'集中度5',lo:5,hi:6}
+];
+function gapBlock(title,list,desc){
+  const by={}; list.forEach(x=>{const tg=tagOf(x.subject),k=tg.subj||tg.name;by[k]=(by[k]||0)+1;});
+  const subs=Object.keys(by).sort((a,b)=>by[b]-by[a]).slice(0,3);
+  return h('div',{class:'gapb'},
+    h('div',{style:'font-weight:700;font-family:var(--f-disp)',text:title+'('+list.length+'回)'}),
+    list.length?[
+      h('p',{class:'note',style:'margin-top:4px',text:desc}),
+      subs.length?h('p',{class:'note',text:'多い教科: '+subs.map(k=>k+' '+by[k]+'回').join('、')}):null,
+      h('ul',{class:'gapl'},list.slice().sort((a,b)=>b.start-a.start).slice(0,5).map(x=>
+        h('li',{text:dateLong(x.start)+' '+tl(tagOf(x.subject))+'・集中'+x.focus+' / 効率'+Math.round(x.eff)})))
+    ]:h('p',{class:'note',style:'margin-top:4px',text:'この期間は、当てはまる記録がありません。'}));
+}
+function gapCard(){
+  const sc=xScope(), E=sc.list.filter(x=>x.eff!=null&&x.focus>=1);
+  const card=h('div',{class:'card'},xHead('集中度と効率のギャップ'),
+    h('p',{class:'sub',text:'「自分では集中できたか(5段階)」と「実際のペース(効率指数)」の食いちがいを探します。'}));
+  if(E.length<6){
+    card.append(h('p',{class:'empty',text:'量と集中度を入れた記録が6回以上たまると出てきます。(いまは'+E.length+'回)'}));
+    return card;
+  }
+  const FB=bucketize(E,FOC,x=>x.focus), box=h('div',{class:'chart'});
+  reg(box,b=>drawDiv(b,FB.bk,FB.best,'集中度'));
+  const hiLo=E.filter(x=>x.focus>=4&&x.eff<=90), loHi=E.filter(x=>x.focus<=2&&x.eff>=110);
+  card.append(h('h3',{class:'tah',text:'集中度ごとの、いつもとの差'}),box,
+    gapBlock('高集中 × 低効率(集中4以上・効率90以下)',hiLo,'「頑張っているのに進まない」状態です。難易度が高すぎる、勉強法が合っていない、環境(雑音等)に問題がある可能性があります。'),
+    gapBlock('低集中 × 高効率(集中2以下・効率110以上)',loHi,'「気乗りしないがサクサク進む」状態です。内容が易しすぎる、作業的(単純暗記など)である可能性があります。'),
+    h('p',{class:'note',style:'margin-top:14px',text:'「ただ頑張る」のではなく、学習のやり方や教材のレベルが合っているかをふり返るきっかけにします。'}));
+  return card;
+}
+
+/* ---------- ③ 限界時間 ---------- */
+const LIM=[{lo:0,hi:10},{lo:10,hi:20},{lo:20,hi:30},{lo:30,hi:40},{lo:40,hi:50},{lo:50,hi:60},{lo:60,hi:90},{lo:90,hi:1e9}];
+const LIMLAB=['〜10分','10〜','20〜','30〜','40〜','50〜','60〜','90〜'];
+function limitOf(list){
+  const bins=LIM.map(d=>{
+    const L=list.filter(x=>x.min>=d.lo&&x.min<d.hi);
+    return {lo:d.lo,n:L.length,eff:L.length?wavg(L):null};
+  });
+  let seenHigh=false;
+  for(const b of bins){
+    if(b.n<2) continue;
+    if(b.eff>=100) seenHigh=true;
+    else if(seenHigh&&b.lo>=20) return {min:b.lo,bins:bins};
+  }
+  return {min:null,bins:bins};
+}
+const subjOfRec=x=>{const tg=tagOf(x.subject);return normName(tg.subj||tg.name);};
+function limitFor(subj){
+  if(S.sample) return null;
+  const E=withEff(S.sessions).filter(x=>x.eff!=null), k=normName(subj), mine=E.filter(x=>subjOfRec(x)===k);
+  if(mine.length>=6){const r=limitOf(mine);if(r.min!=null) return {min:r.min,n:mine.length,src:'subject'};}
+  if(E.length>=10){const r=limitOf(E);if(r.min!=null) return {min:r.min,n:E.length,src:'all'};}
+  return null;
+}
+function limitCard(){
+  const E=withEff(S.sessions).filter(x=>x.eff!=null), names=[], seen=new Set();
+  SUBJECTS.forEach(x=>{const n=x.subj||x.name,k=normName(n);if(!seen.has(k)){seen.add(k);names.push(n);}});
+  const rows=names.map(n=>{
+    const k=normName(n), L=E.filter(x=>subjOfRec(x)===k);
+    return {n:n,cnt:L.length,res:L.length>=6?limitOf(L):null};
+  }).filter(r=>r.cnt>0);
+  const card=h('div',{class:'card'},h('h2',{text:'教科ごとの限界時間'}),
+    h('p',{class:'sub',text:'1回の勉強が何分を超えると、効率指数が100(いつもの自分)を下回り始めるかの目安です。全期間の記録から出します。'}));
+  if(!rows.length){card.append(h('p',{class:'empty',text:'量を入れた記録がたまると、ここに出ます。'}));return card;}
+  card.append(h('ul',{class:'share'},rows.map(r=>{
+    const val=r.res?(r.res.min!=null?r.res.min+'分ごろ':'見つかりません'):'あと'+(6-r.cnt)+'回';
+    const txt=r.res?(r.res.min!=null
+      ?'記録'+r.cnt+'回から。'+r.res.min+'分を超えると、効率指数が100を下回りやすくなります。'
+      :'記録'+r.cnt+'回では、長くしても100を下回る傾向は見つかりませんでした。')
+      :'記録が'+r.cnt+'回です。6回たまると出ます。';
+    return h('li',{},h('div',{class:'hd'},
+      h('span',{class:'nm'},h('i',{style:'background:'+(subjColor(r.n)||'var(--muted)')}),r.n),h('span',{class:'tm',text:val})),
+      h('div',{class:'amt',text:txt}));
+  })));
+  const withRes=rows.filter(r=>r.res);
+  if(withRes.length) card.append(h('details',{class:'tv'},h('summary',{text:'長さごとの効率指数を表で見る'}),h('div',{class:'tscroll'},
+    h('table',{},h('thead',{},h('tr',{},h('th',{text:'教科'}),LIMLAB.map(l=>h('th',{text:l})))),
+      h('tbody',{},withRes.map(r=>h('tr',{},h('td',{text:r.n}),r.res.bins.map(b=>h('td',{text:b.n>=2?String(Math.round(b.eff)):'–'})))))))));
+  card.append(h('label',{style:'display:flex;gap:10px;align-items:center;margin-top:14px;min-height:44px;font-size:13.5px'},
+    h('input',{type:'checkbox',checked:S.limitAlert,style:'width:22px;height:22px;min-height:0;flex:none',on:{change:e=>{S.limitAlert=e.target.checked;saveStore();}}}),
+    h('span',{text:'タイマーで、限界時間の1分前に画面でおしらせする(音は出ません)'})));
+  return card;
+}
+function limitNote(){
+  const t=S.timer, tg=tagOf(t.subject), name=tg.subj||tg.name;
+  T.limit=limitFor(name);
+  const txt=S.sample?'いまはサンプルのデータです。自分の記録がたまると、限界時間が出ます。'
+    :T.limit?'「'+name+'」の限界時間の目安は '+T.limit.min+'分です。(記録'+T.limit.n+'回から'+(T.limit.src==='all'?'・全教科まとめて':'')+')'
+    :'「'+name+'」の限界時間は、量を入れた記録がたまると出ます。';
+  return h('div',{style:'margin-top:12px'},h('p',{class:'note',text:txt}),
+    h('label',{style:'display:flex;gap:10px;align-items:center;min-height:44px;font-size:13px;color:var(--ink-2)'},
+      h('input',{type:'checkbox',checked:S.limitAlert,style:'width:22px;height:22px;min-height:0;flex:none',on:{change:e=>{S.limitAlert=e.target.checked;saveStore();}}}),
+      h('span',{text:'限界時間の1分前に、画面でおしらせする(音は出ません)'})));
+}
+function paintAlert(){
+  if(!T.alert||!T.alert.isConnected) return;
+  const t=S.timer;
+  if(T.al!==1||t.status!=='running'||!T.limit){T.alert.hidden=true;T.alert.replaceChildren();return;}
+  const tg=tagOf(t.subject), name=tg.subj||tg.name;
+  T.alert.replaceChildren(
+    h('p',{text:'そろそろ'+name+'の限界時間です。5分休憩しませんか?'}),
+    h('div',{class:'btns',style:'margin-top:8px;justify-content:flex-start'},
+      h('button',{type:'button',class:'btn sm pri',on:{click:()=>{T.al=2;pauseTimer();}}},'休憩する(一時停止)'),
+      h('button',{type:'button',class:'btn sm',on:{click:()=>{T.al=2;paintAlert();}}},'あとで')));
+  T.alert.hidden=false;
+}
+function checkLimit(){
+  const t=S.timer;
+  if(t.status==='running'&&S.limitAlert&&T.limit&&T.al!==1&&T.al!==2&&elapsedMs()/60000>=T.limit.min-1){T.al=1;paintAlert();}
+}
+
+/* ---------- ⑤ おすすめ学習 ---------- */
+function recommendNow(){
+  const now=new Date(), hr=now.getHours(), td=TOD.find(d=>hr>=d.lo&&hr<d.hi)||TOD[0];
+  if(S.sample) return {tod:td,list:[],pend:[],sample:true};
+  const E=withEff(S.sessions).filter(x=>{const hh=new Date(x.start).getHours();return x.eff!=null&&hh>=td.lo&&hh<td.hi;});
+  const pend=routinesOn(now.getDay()).filter(r=>SUBJ[r.subject]&&!routineState(r).done);
+  const pendSub=new Set(pend.map(r=>r.subject)), by={};
+  E.forEach(x=>{(by[x.subject]=by[x.subject]||[]).push(x);});
+  const list=Object.keys(by).filter(id=>SUBJ[id]&&by[id].length>=3).map(id=>{
+    const e=wavg(by[id]);
+    return {id:id,eff:e,n:by[id].length,pending:pendSub.has(id),score:e+(pendSub.has(id)?8:0)};
+  }).sort((a,b)=>b.score-a.score).slice(0,3);
+  return {tod:td,list:list,pend:pend,sample:false};
+}
+function pickRec(id){
+  const t=S.timer;
+  if(t.status!=='idle'){toast('いまのタイマーを終えてから選んでください');return;}
+  t.subject=id;t.task='';S.rec=null;S.tagEdit=null;saveStore();renderTimer();
+  toast('タイマーにセットしました。スタートを押してください');
+}
+function recCard(){
+  const r=S.rec; if(!r) return null;
+  const card=h('div',{class:'recbox'},
+    h('div',{style:'display:flex;justify-content:space-between;gap:10px;align-items:baseline'},
+      h('b',{style:'font-family:var(--f-disp)',text:'いまのおすすめ'}),
+      h('button',{type:'button',class:'linkbtn',on:{click:()=>{S.rec=null;renderTimer();}}},'閉じる')));
+  if(r.sample){card.append(h('p',{class:'note',text:'いまはサンプルのデータです。自分の記録がたまると、おすすめが出ます。'}));return card;}
+  if(r.list.length) card.append(h('p',{class:'note',text:r.tod.name+'に始めた、これまでの記録から選びました。'}));
+  r.list.forEach(it=>{
+    const tg=tagOf(it.id), d=Math.round(it.eff-100);
+    card.append(h('div',{class:'recrow'},
+      h('div',{},h('div',{class:'rtt'},h('i',{style:'background:'+tg.c}),h('span',{text:tl(tg)})),
+        h('div',{class:'rtm',text:r.tod.name+'の'+tg.name+'は、いつものペースより '+(d>=0?'+':'−')+Math.abs(d)+'%('+it.n+'回)'+(it.pending?'・今日の予定にもあります':'')})),
+      h('button',{type:'button',class:'btn sm',on:{click:()=>pickRec(it.id)}},'これにする')));
+  });
+  const shown=new Set(r.list.map(x=>x.id)), more=r.pend.filter(x=>!shown.has(x.subject)).slice(0,Math.max(0,3-r.list.length));
+  if(more.length){
+    card.append(h('p',{class:'note',style:'margin-top:8px',text:'今日の予定で、まだのもの'}));
+    more.forEach(x=>{
+      const tg=tagOf(x.subject), mm=rMemo(x,tg);
+      card.append(h('div',{class:'recrow'},
+        h('div',{},h('div',{class:'rtt'},h('i',{style:'background:'+tg.c}),h('span',{text:tl(tg)+(mm?'・'+mm:'')})),
+          h('div',{class:'rtm',text:x.min>0?'目標 '+x.min+'分':'時間の目標なし'})),
+        h('button',{type:'button',class:'btn sm',on:{click:()=>{S.rec=null;startRoutine(x);}}},'これにする')));
+    });
+  }
+  if(!r.list.length&&!more.length) card.append(h('p',{class:'note',text:'この時間帯の記録がまだ足りません。同じ教科で、量を入れた記録が3回以上たまると、おすすめが出ます。'}));
+  else if(!r.list.length) card.append(h('p',{class:'note',style:'margin-top:6px',text:'この時間帯の記録は、まだ足りません。(同じ教科で3回以上)'}));
+  return card;
+}
+
 function renderStats(){
   const root=$('#p-stats'); CH.length=0; root.replaceChildren();
   const ALL=withEff(S.sessions), N=S.range, today0=startOfDay(Date.now()), from=addDays(today0,-(N-1));
@@ -2674,7 +3012,7 @@ function renderStats(){
   const todCard=h('div',{class:'card'},h('h2',{text:'いつ始めるといい?'}),h('p',{class:'sub',text:'始めた時間帯ごとの、いつもとの差。'}),tbox);
   const how=h('p',{class:'note',style:'padding:2px 4px',text:'効率指数は、タスクごとの「これまでの平均ペース(時間あたりの量)」を100として、その記録のペースを比べた数字です。量を入れた記録だけが対象です。'});
 
-  root.append(h('div',{class:'sgrid'},hero,insCard,daily,h('div',{class:'sgrid two'},subjCard,effCard),h('div',{class:'sgrid two'},lenCard,todCard),how));
+  root.append(h('div',{class:'sgrid'},hero,insCard,streakCard(),daily,h('div',{class:'sgrid two'},subjCard,effCard),h('div',{class:'sgrid two'},lenCard,todCard),weekdayCard(),gapCard(),limitCard(),how));
   drawAll();
 }
 
