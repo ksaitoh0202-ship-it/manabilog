@@ -1384,7 +1384,7 @@ function applyRoutines(list,replace){
   list.forEach(x=>{
     let tg=SUBJECTS.find(t=>normName(t.name)===normName(x.n)&&normName(t.subj||t.name)===normName(x.s));
     if(!tg){
-      if(SUBJECTS.length>=9999){skipped++;return;}
+      if(SUBJECTS.length>=20){skipped++;return;}
       tg={id:newTagId(),name:x.n,subj:x.s,unit:x.u,c:x.c||subjColor(x.s)||PRESET_COLORS[SUBJECTS.length%PRESET_COLORS.length]};
       SUBJECTS.push(tg);rebuildSubj();newTags++;
     }
@@ -2059,7 +2059,7 @@ function applyTags(list){
   let added=0,had=0,skipped=0;
   list.forEach(x=>{
     if(SUBJECTS.some(t=>normName(t.name)===normName(x.n)&&normName(t.subj||t.name)===normName(x.s))){had++;return;}
-    if(SUBJECTS.length>=20skipped++;return;}
+    if(SUBJECTS.length>=20){skipped++;return;}
     SUBJECTS.push({id:newTagId(),name:x.n,subj:x.s,unit:x.u,c:x.c||subjColor(x.s)||PRESET_COLORS[SUBJECTS.length%PRESET_COLORS.length]});
     rebuildSubj();added++;
   });
