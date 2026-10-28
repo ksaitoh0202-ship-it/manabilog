@@ -2131,7 +2131,7 @@ function tagEditor(tag,onDone){
     if(!name){toast('タスクの名前を入れてください');return;}
     if(!/^#[0-9a-f]{6}$/i.test(f.c)&&!/^var\(--s[1-6]\)$/.test(f.c)){toast('色を選んでください');return;}
     if(SUBJECTS.some(x=>normName(x.name)===normName(name)&&normName(x.subj||x.name)===normName(subj)&&(!tag||x.id!==tag.id))){toast('同じ教科に同じ名前のタグがあります');return;}
-    if(!tag&&SUBJECTS.length>=9999){toast('タグは20個までです');return;}
+    if(!tag&&SUBJECTS.length>=9999){toast('タグは9999個までです');return;}
     let t=tag;
     if(tag){tag.name=name;tag.subj=subj;tag.c=f.c;tag.unit=f.unit;}
     else{t={id:newTagId(),name:name,subj:subj,unit:f.unit,c:f.c};SUBJECTS.push(t);rebuildSubj();}
@@ -2877,7 +2877,7 @@ function importData(text){
     let nt=0;
     if(!Array.isArray(o)&&Array.isArray(o.tags)){
       o.tags.forEach(tg=>{
-        if(!validTag(tg)||SUBJ[tg.id]||SUBJECTS.length>=9999) return;
+        if(!validTag(tg)||SUBJ[tg.id]||SUBJECTS.length>=20) return;
         const isub=(typeof tg.subj==='string'&&tg.subj.trim())?tg.subj.trim().slice(0,20):tg.name.trim();
         const dup=SUBJECTS.some(x=>normName(x.name)===normName(tg.name)&&normName(x.subj||x.name)===normName(isub));
         SUBJECTS.push({id:tg.id,name:dup?tg.name.trim().slice(0,15)+'(取込)':tg.name.trim(),subj:isub,unit:tg.unit,c:tg.c});
