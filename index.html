@@ -464,282 +464,194 @@ th{font-weight:500;color:var(--ink-2)}
 
 <script>
 /* ====================================================================
-   manabilog-game.js  ― まなびログ「ごほうびゲーム」モジュール(単独ファイル)
+   manabilog-game.js v2 ― まなびログ「ごほうび」(タスク完了+強化+アセンション+プレステージ)
    --------------------------------------------------------------------
-   1クエスト(確認項目1つ / 勉強の記録1回)のポイント =
+   1回あたりのポイント =
+       (10 + 加算) × 強化1の倍率 × 強化2の倍率 × … × 強化10の倍率 × プレステージ倍率 ^ プレステージ乗数
 
-       ( 基礎値 + 固定加算 ) × 倍率 × 転生ボーナス × 大成功
+   ・タスクを完了する … 上の式のポイントがもらえる(最初は10)
+   ・強化(1〜10)  … 最初のコストは 10^n。Lv0→Lv1にすると「加算」が 10^n 増える(以降ずっと)
+                    Lvが1上がるごとに倍率 +0.20 (1, 1.20, 1.40 …) / コストは1Lvごとに×1.10
+   ・上限(最初は10Lv) … 上限まで買うと「アセンション」。Lv1に戻る(倍率はそのまま)
+                    コスト=上限の半分のLvのコスト / 次の上限+10 / 加算 +10^n / コスト増加率 +0.10
+   ・プレステージ … 1e5pt以上で可能。ポイントと強化をリセット。
+                    乗数 +0.10×(e-4)、倍率 ×10^(e-4)  (eは10の何乗か: 1e5→e=5)
+   ・勉強の記録/確認項目 … 1回分(5分ごと・最大12回分)のポイントがもらえる(同じ項目は1回だけ)
 
-     基礎値      確認項目 = 10 / 勉強の記録(5分以上) = 時間(5分ごとに2)+量(2ごとに1・最大30)+集中4以上で3
-     固定加算    「アイテム」(施設・装備)の合計。1回きりの購入。転生するまでずっと有効
-     倍率        「強化」(Cookie Clicker風)の合計。初期値 1.0。何度でも買えて、買うほど値段が上がる
-     転生ボーナス 転生でもらえる★の数 × 10% (初期値 1.0)。転生しても消えない
-     大成功      通常 ×1.0 / 大成功のとき ×2.0〜5.0(確率 5% 〜。お守り・幸運で上がる)
+   localStorage キー manabilog.game.v2 のみ使用(旧 v1 のデータは削除)
 
-   本体(まなびログ)とは独立。localStorage キー manabilog.game.v1 だけを使う。
-
-   [公開API]
-     ManabiGame.awardItems(items)  確認項目を完了にしたとき items=[{id,label}] → {pts,n,crits,parts}
-     ManabiGame.awardSession(rec)  勉強を記録したとき rec={id,min,amount,focus,start} → {pts,crit,parts}
-     ManabiGame.render(container)  ゲーム画面を描く
-     ManabiGame.getPoints() / getStars() / getTotal()
-     ManabiGame.onChange(fn)       変化のたびに fn(info)
-     ManabiGame.exportData() / importData(obj) / reset()
+   [公開API]  awardItems(items) / awardSession(rec) / render(el) / getPoints() / getStars() / getTotal()
+              onChange(fn) / exportData() / importData(o) / reset() / fmt(n)
    ==================================================================== */
 (function(global){
 'use strict';
 
-/* ---------- 設定 ---------- */
-const KEY='manabilog.game.v1';
-const ITEM_BASE=10;
-const GACHA_COST=40;
-const LOG_MAX=30;
-const AWARDED_MAX=3000;
-const CRIT_BASE=0.05, CRIT_CAP=0.6, CRIT_MIN=2, CRIT_MAX=5;
-const PRESTIGE_UNIT=500;
-const STAR_BONUS=0.10;
-const LV_CAP=300;
-const SESSION_MIN=5;
-
-const UPGRADES=[
-  {id:'focus', name:'集中力',   icon:'🎯', kind:'mult', per:0.05, base:30,   grow:1.15, desc:'倍率 +0.05 / Lv'},
-  {id:'habit', name:'習慣力',   icon:'📅', kind:'mult', per:0.15, base:200,  grow:1.17, desc:'倍率 +0.15 / Lv'},
-  {id:'method',name:'勉強法',   icon:'🧠', kind:'mult', per:0.50, base:1500, grow:1.20, desc:'倍率 +0.50 / Lv'},
-  {id:'luck',  name:'幸運',     icon:'🍀', kind:'crit', per:0.01, base:100,  grow:1.20, max:30, desc:'大成功の確率 +1% / Lv(最大30)'}
-];
-
-const GEAR=[
-  {id:'desk',  name:'学習机',         icon:'🪑', group:'施設', flat:1,  cost:40},
-  {id:'lamp',  name:'電気スタンド',   icon:'💡', group:'装備', flat:2,  cost:120},
-  {id:'pen',   name:'蛍光ペン',       icon:'🖍️', group:'装備', flat:3,  cost:300},
-  {id:'charm', name:'合格お守り',     icon:'🧧', group:'装備', crit:0.05, cost:500},
-  {id:'book',  name:'参考書セット',   icon:'📚', group:'装備', flat:5,  cost:700},
-  {id:'room',  name:'自習室の席',     icon:'🏫', group:'施設', flat:8,  cost:1600},
-  {id:'glass', name:'砂時計',         icon:'⏳', group:'装備', crit:0.05, cost:2500},
-  {id:'tablet',name:'タブレット',     icon:'📱', group:'装備', flat:12, cost:3600},
-  {id:'tutor', name:'家庭教師',       icon:'🧑‍🏫', group:'施設', flat:20, cost:8000},
-  {id:'lib',   name:'図書館の個室',   icon:'🏛️', group:'施設', flat:35, cost:18000}
-];
-
-const RARITY={
-  N: {name:'ノーマル', w:62, back:5,  color:'#8a8f98'},
-  R: {name:'レア',     w:28, back:12, color:'#2a78d6'},
-  SR:{name:'スーパーレア',w:9, back:30, color:'#eda100'},
-  UR:{name:'ウルトラ', w:1,  back:80, color:'#e87ba4'}
-};
-const COLLECTION=[
-  ['n1','えんぴつ','✏️','N'],['n2','ノート','📓','N'],['n3','けしゴム','🧽','N'],['n4','ものさし','📏','N'],
-  ['n5','ふせん','🗒️','N'],['n6','ホチキス','📎','N'],['n7','マーカー','🖍️','N'],['n8','時計','⏰','N'],
-  ['r1','電球','💡','R'],['r2','地球儀','🌍','R'],['r3','望遠鏡','🔭','R'],['r4','顕微鏡','🔬','R'],
-  ['r5','本の山','📚','R'],['r6','パレット','🎨','R'],
-  ['s1','金メダル','🥇','SR'],['s2','トロフィー','🏆','SR'],['s3','ロケット','🚀','SR'],['s4','王冠','👑','SR'],
-  ['u1','ひらめきの星','🌟','UR'],['u2','知恵のドラゴン','🐉','UR']
-].map(a=>({id:a[0],name:a[1],icon:a[2],r:a[3]}));
-
-const RANKS=[
-  [0,'はじめの一歩'],[100,'見習い学習者'],[300,'コツコツ学習者'],[700,'がんばり屋'],
-  [1500,'学びの達人'],[3000,'勉強マスター'],[6000,'伝説の学習者'],[15000,'学びの賢者'],[40000,'レジェンド']
-];
-
-/* ---------- 保存 ---------- */
+const KEY='manabilog.game.v2', OLD_KEY='manabilog.game.v1';
+const BASE_PTS=10, CAP0=10, CAP_STEP=10, MULT_STEP=0.20, G0=1.10, G_STEP=0.10;
+const PRE_MIN=1e5, LOG_MAX=20, AWARDED_MAX=3000, SESSION_MIN=5, SESSION_MAX_PRESS=12;
+const FAC=[['えんぴつ','✏️'],['ノート','📓'],['学習机','🪑'],['電気スタンド','💡'],['参考書','📚'],
+           ['自習室','🏫'],['家庭教師','🧑‍🏫'],['塾','🏢'],['図書館','🏛️'],['大学','🎓']].map((a,i)=>({n:i+1,name:a[0],icon:a[1]}));
+const p10=n=>Math.pow(10,n);
+const r2=x=>Math.round(x*100)/100;
+const freshFac=i=>({lv:0,asc:0,m:1,base:p10(i+1)*G0,g:G0});
 function blank(){
-  const up={}; UPGRADES.forEach(u=>{up[u.id]=0;});
-  return {v:2,points:0,runTotal:0,total:0,spent:0,up:up,gear:{},stars:0,prestiges:0,
-          items:{},awarded:[],sessions:[],log:[],pulls:0,crits:0};
+  return {v:3,points:0,total:0,prestiges:0,presses:0,pm:1,pe:0,fac:FAC.map((f,i)=>freshFac(i)),awarded:[],sessions:[],log:[]};
 }
-let G=load();
-function load(){
-  try{
-    const raw=localStorage.getItem(KEY);
-    if(raw) return norm(JSON.parse(raw));
-  }catch(e){}
-  return blank();
-}
-function nn(x){x=Number(x);return Number.isFinite(x)&&x>=0?Math.floor(x):0;}
+function num(x,d){x=Number(x);return Number.isFinite(x)&&x>=0?x:d;}
 function norm(o){
-  const b=blank(); if(!o||typeof o!=='object') return b;
-  b.points=nn(o.points); b.total=Math.max(nn(o.total),b.points); b.spent=nn(o.spent);
-  b.runTotal=(o.runTotal==null)?b.total:Math.max(nn(o.runTotal),b.points);
-  b.pulls=nn(o.pulls); b.crits=nn(o.crits); b.stars=nn(o.stars); b.prestiges=nn(o.prestiges);
-  UPGRADES.forEach(u=>{b.up[u.id]=Math.min(u.max||LV_CAP,LV_CAP,nn(o.up&&o.up[u.id]));});
-  if(o.gear&&typeof o.gear==='object') GEAR.forEach(g=>{if(o.gear[g.id]) b.gear[g.id]=1;});
-  if(o.items&&typeof o.items==='object') COLLECTION.forEach(c=>{const k=nn(o.items[c.id]); if(k>0) b.items[c.id]=k;});
+  if(!o||typeof o!=='object'||o.v!==3) return null;
+  const b=blank();
+  b.points=Math.floor(num(o.points,0)); b.total=Math.max(Math.floor(num(o.total,0)),b.points);
+  b.prestiges=Math.floor(num(o.prestiges,0)); b.presses=Math.floor(num(o.presses,0));
+  b.pm=Math.max(1,num(o.pm,1)); b.pe=num(o.pe,0);
+  if(Array.isArray(o.fac)) FAC.forEach((F,i)=>{
+    const x=o.fac[i]; if(!x||typeof x!=='object') return;
+    const a=Math.floor(num(x.asc,0)), c=CAP0+CAP_STEP*a;
+    b.fac[i]={lv:Math.min(c,Math.floor(num(x.lv,0))),asc:a,m:Math.max(1,num(x.m,1)),base:Math.max(1,num(x.base,b.fac[i].base)),g:Math.max(G0,num(x.g,G0))};
+  });
   b.awarded=Array.isArray(o.awarded)?o.awarded.filter(x=>typeof x==='string').slice(-AWARDED_MAX):[];
   b.sessions=Array.isArray(o.sessions)?o.sessions.filter(x=>typeof x==='string').slice(-AWARDED_MAX):[];
   b.log=Array.isArray(o.log)?o.log.filter(x=>x&&typeof x.t==='string').slice(-LOG_MAX).map(x=>({t:x.t.slice(0,80),d:Number(x.d)||0,at:Number(x.at)||0})):[];
   return b;
 }
+function load(){
+  let g=null;
+  try{const raw=localStorage.getItem(KEY); if(raw) g=norm(JSON.parse(raw));}catch(e){}
+  if(!g) g=blank();
+  /* 旧ごほうびのデータは消す(同じ項目でポイントを二重にもらわないよう、IDだけ引き継ぐ) */
+  try{
+    const old=localStorage.getItem(OLD_KEY);
+    if(old){
+      const o=JSON.parse(old);
+      if(o&&Array.isArray(o.awarded)) g.awarded=[...new Set(o.awarded.filter(x=>typeof x==='string').concat(g.awarded))].slice(-AWARDED_MAX);
+      if(o&&Array.isArray(o.sessions)) g.sessions=[...new Set(o.sessions.filter(x=>typeof x==='string').concat(g.sessions))].slice(-AWARDED_MAX);
+      localStorage.removeItem(OLD_KEY);
+      localStorage.setItem(KEY,JSON.stringify(g));
+    }
+  }catch(e){}
+  return g;
+}
+let G=load();
 function save(){try{localStorage.setItem(KEY,JSON.stringify(G));}catch(e){}}
 
-/* ---------- 変更通知 ---------- */
 const listeners=[], viewers=[];
 function emit(info){
   save();
   listeners.forEach(f=>{try{f(info);}catch(e){}});
-  viewers.slice().forEach(v=>{ if(v.box.isConnected) draw(v.box); });
+  viewers.slice().forEach(v=>{if(v.box.isConnected) draw(v.box);});
 }
 function pushLog(t,d){G.log.push({t:t,d:d,at:Date.now()}); if(G.log.length>LOG_MAX) G.log=G.log.slice(-LOG_MAX);}
-let rnd=Math.random;
 
 /* ---------- 計算式 ---------- */
-const upCost=u=>Math.round(u.base*Math.pow(u.grow,G.up[u.id]));
-const flatBonus=()=>GEAR.reduce((t,g)=>t+(G.gear[g.id]?(g.flat||0):0),0);
-const multiplier=()=>UPGRADES.reduce((t,u)=>t+(u.kind==='mult'?u.per*G.up[u.id]:0),1);
-const prestigeBonus=()=>1+STAR_BONUS*G.stars;
-const critChance=()=>Math.min(CRIT_CAP,CRIT_BASE
-  +UPGRADES.reduce((t,u)=>t+(u.kind==='crit'?u.per*G.up[u.id]:0),0)
-  +GEAR.reduce((t,g)=>t+(G.gear[g.id]?(g.crit||0):0),0));
-const r1=x=>Math.round(x*10)/10;
-function rollRandom(){
-  if(rnd()<critChance()) return r1(CRIT_MIN+(CRIT_MAX-CRIT_MIN)*rnd());
-  return 1;
-}
-function reward(base){
-  const flat=flatBonus(), mult=multiplier(), pre=prestigeBonus(), rf=rollRandom();
-  const pts=Math.max(1,Math.round((base+flat)*mult*pre*rf));
-  return {pts:pts,base:base,flat:flat,mult:mult,pre:pre,rf:rf,crit:rf>1};
-}
-function gain(pts,reason){
-  G.points+=pts; G.runTotal+=pts; G.total+=pts; pushLog(reason,pts);
-}
-const dkey=ms=>{const d=new Date(ms),p=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());};
+const capOf=f=>CAP0+CAP_STEP*f.asc;
+const costOf=i=>{const f=G.fac[i]; return f.lv===0?p10(i+1):f.base*Math.pow(f.g,f.lv-1);};
+const flatOf=i=>{const f=G.fac[i]; return f.lv>=1?p10(i+1)*(1+f.asc):0;};
+const flatSum=()=>FAC.reduce((t,_,i)=>t+flatOf(i),0);
+const multProd=()=>G.fac.reduce((t,f)=>t*f.m,1);
+const preFactor=()=>G.pe>0?Math.pow(G.pm,G.pe):1;
+const pressValue=()=>Math.max(1,Math.round((BASE_PTS+flatSum())*multProd()*preFactor()));
+function gain(pts){G.points+=pts; G.total+=pts;}
 
-/* ---------- ポイントの獲得 ---------- */
+/* ---------- 操作 ---------- */
+function press(){
+  const v=pressValue(); gain(v); G.presses++;
+  emit({type:'press',pts:v}); return v;
+}
+function buy(i){
+  const f=G.fac[i]; if(!f||f.lv>=capOf(f)) return false;
+  const c=costOf(i); if(G.points<c) return false;
+  G.points-=c; f.lv++; f.m=r2(f.m+MULT_STEP);
+  pushLog(FAC[i].name+' Lv'+f.lv,-c);
+  emit({type:'buy',i:i}); return true;
+}
+function ascend(i){
+  const f=G.fac[i]; if(!f||f.lv<capOf(f)) return false;
+  const half=capOf(f)/2;                          /* 上限の半分のLvのコスト */
+  f.base=f.base*Math.pow(f.g,half-1);
+  f.g=r2(f.g+G_STEP); f.asc++; f.lv=1;            /* 倍率 m はそのまま */
+  pushLog(FAC[i].name+' アセンション('+f.asc+'回目)',0);
+  emit({type:'asc',i:i}); return true;
+}
+function preE(){return G.points>=PRE_MIN?Math.floor(Math.log10(G.points)+1e-12):0;}
+function preGain(){const k=preE()-4; return k>=1?{k:k,pe:r2(0.1*k),pm:p10(k)}:null;}
+function prestige(){
+  const g=preGain(); if(!g) return null;
+  G.pe=r2(G.pe+g.pe); G.pm=G.pm*g.pm; G.prestiges++;
+  G.points=0; G.fac=FAC.map((f,i)=>freshFac(i));
+  pushLog('プレステージ(乗数 +'+g.pe+' / 倍率 ×'+fmt(g.pm)+')',0);
+  emit({type:'prestige'}); return g;
+}
+
+/* ---------- 勉強・確認項目からのポイント ---------- */
 function awardItems(list){
   if(!Array.isArray(list)||!list.length) return {pts:0,n:0,crits:0,parts:[]};
-  const have=new Set(G.awarded); let n=0, pts=0, crits=0, best=1;
-  list.forEach(x=>{
-    const id=x&&typeof x.id==='string'?x.id:''; if(!id||have.has(id)) return;
-    have.add(id); G.awarded.push(id); n++;
-    const r=reward(ITEM_BASE); pts+=r.pts;
-    if(r.crit){crits++; G.crits++; if(r.rf>best) best=r.rf;}
-  });
+  const have=new Set(G.awarded); let n=0;
+  list.forEach(x=>{const id=x&&typeof x.id==='string'?x.id:''; if(!id||have.has(id)) return; have.add(id); G.awarded.push(id); n++;});
   if(G.awarded.length>AWARDED_MAX) G.awarded=G.awarded.slice(-AWARDED_MAX);
   if(!n) return {pts:0,n:0,crits:0,parts:[]};
-  gain(pts,'確認項目 '+n+'件を完了'+(crits?'(大成功×'+best+')':''));
-  const parts=['確認項目 '+n+'件'];
-  if(crits) parts.push('大成功 '+crits+'回');
-  emit({type:'items',pts:pts,n:n,crits:crits,best:best});
-  return {pts:pts,n:n,crits:crits,parts:parts};
+  const pts=pressValue()*n; gain(pts); pushLog('確認項目 '+n+'件を完了',pts);
+  emit({type:'items',pts:pts,n:n});
+  return {pts:pts,n:n,crits:0,parts:['確認項目 '+n+'件']};
 }
-
 function awardSession(rec){
   if(!rec||typeof rec!=='object') return {pts:0,crit:false,parts:[]};
   const id=String(rec.id||''); if(id&&G.sessions.includes(id)) return {pts:0,crit:false,parts:[]};
-  const min=Math.max(0,Number(rec.min)||0), amount=Math.max(0,Number(rec.amount)||0), focus=Number(rec.focus)||0;
-  if(min<SESSION_MIN) return {pts:0,crit:false,parts:[]};
-  const timePts=Math.floor(min/5)*2, amtPts=Math.min(30,Math.floor(amount/2)), focPts=focus>=4?3:0;
-  const parts=['時間 '+timePts]; if(amtPts) parts.push('量 '+amtPts); if(focPts) parts.push('集中 '+focPts);
-  const r=reward(timePts+amtPts+focPts);
-  if(r.crit){G.crits++; parts.push('大成功 ×'+r.rf);}
-  gain(r.pts,'勉強の記録 '+Math.round(min)+'分'+(r.crit?'(大成功×'+r.rf+')':''));
+  const min=Math.max(0,Number(rec.min)||0); if(min<SESSION_MIN) return {pts:0,crit:false,parts:[]};
+  const k=Math.min(SESSION_MAX_PRESS,Math.floor(min/5)), pts=pressValue()*k;
+  gain(pts); pushLog('勉強の記録 '+Math.round(min)+'分',pts);
   if(id){G.sessions.push(id); if(G.sessions.length>AWARDED_MAX) G.sessions=G.sessions.slice(-AWARDED_MAX);}
-  emit({type:'session',pts:r.pts,crit:r.crit,rf:r.rf,parts:parts});
-  return {pts:r.pts,crit:r.crit,parts:parts};
+  emit({type:'session',pts:pts});
+  return {pts:pts,crit:false,parts:['勉強 '+k+'回分']};
 }
 
-/* ---------- アイテム / 強化 / 転生 ---------- */
-function buyGear(id){
-  const g=GEAR.find(x=>x.id===id); if(!g||G.gear[id]) return false;
-  if(G.points<g.cost) return false;
-  G.points-=g.cost; G.spent+=g.cost; G.gear[id]=1;
-  pushLog('アイテム: '+g.name,-g.cost);
-  emit({type:'gear',id:id});
-  return true;
+/* ---------- 表示用 ---------- */
+function fmt(n){
+  if(!Number.isFinite(n)) return '∞';
+  n=Math.round(n);
+  if(Math.abs(n)<1e9) return n.toLocaleString('ja-JP');
+  return n.toExponential(2).replace('e+','e');
 }
-function buyUpgrade(id){
-  const u=UPGRADES.find(x=>x.id===id); if(!u) return false;
-  if(G.up[id]>=(u.max||LV_CAP)) return false;
-  const c=upCost(u); if(G.points<c) return false;
-  G.points-=c; G.spent+=c; G.up[id]++;
-  pushLog('強化: '+u.name+' Lv'+G.up[id],-c);
-  emit({type:'buy',id:id,lv:G.up[id]});
-  return true;
+function fx(n){
+  if(!Number.isFinite(n)) return '∞';
+  if(Math.abs(n)>=1e6) return n.toExponential(2).replace('e+','e');
+  return String(Math.round(n*100)/100);
 }
-const starsReady=()=>Math.floor(Math.sqrt(G.runTotal/PRESTIGE_UNIT));
-function prestige(){
-  const g=starsReady(); if(g<1) return null;
-  G.stars+=g; G.prestiges++;
-  UPGRADES.forEach(u=>{G.up[u.id]=0;});
-  G.gear={}; G.points=0; G.runTotal=0;
-  pushLog('転生 ★+'+g+'(転生ボーナス ×'+prestigeBonus().toFixed(1)+')',0);
-  emit({type:'prestige',gain:g,stars:G.stars});
-  return {gain:g,stars:G.stars,bonus:prestigeBonus()};
-}
-
-/* ---------- ガチャ ---------- */
-function rollRarity(){
-  const lk=(critChance()-CRIT_BASE)*100*0.5;
-  const w={N:Math.max(10,RARITY.N.w-lk),R:RARITY.R.w+lk*.6,SR:RARITY.SR.w+lk*.35,UR:RARITY.UR.w+lk*.05};
-  let x=rnd()*(w.N+w.R+w.SR+w.UR);
-  for(const k of ['N','R','SR','UR']){ if(x<w[k]) return k; x-=w[k]; }
-  return 'N';
-}
-function pull(){
-  if(G.points<GACHA_COST) return null;
-  G.points-=GACHA_COST; G.spent+=GACHA_COST; G.pulls++;
-  const r=rollRarity(), pool=COLLECTION.filter(c=>c.r===r), c=pool[Math.floor(rnd()*pool.length)];
-  const isNew=!G.items[c.id]; G.items[c.id]=(G.items[c.id]||0)+1;
-  let back=0;
-  if(!isNew){back=RARITY[r].back; G.points+=back; G.spent-=back;}
-  pushLog('ガチャ: '+c.name+(isNew?'(NEW)':'(ダブり +'+back+')'),-GACHA_COST+back);
-  emit({type:'pull',item:c,isNew:isNew,back:back});
-  return {item:c,isNew:isNew,back:back};
-}
-
-/* ---------- 画面 ---------- */
 const CSS=`
 .mg{display:grid;gap:14px;min-width:0;grid-template-columns:minmax(0,1fr)}
 .mg>*{min-width:0}
 @media(min-width:820px){.mg{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}.mg .wide{grid-column:1/-1}}
 .mg-card{background:var(--surface,#fff);border:1px solid var(--line,#ddd);border-radius:14px;padding:18px;min-width:0;color:var(--ink,#111)}
 .mg-card h2{font:700 17px/1.4 var(--f-disp,inherit);margin:0 0 4px}
-.mg-card .mg-sub2{font-size:13px;color:var(--ink-2,#555);margin:0 0 10px}
+.mg-sub2{font-size:13px;color:var(--ink-2,#555);margin:0 0 10px}
 .mg-hero{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 14px}
-.mg-pt{font:700 44px/1.1 var(--f-num,monospace);letter-spacing:-.02em}
+.mg-pt{font:700 44px/1.1 var(--f-num,monospace);letter-spacing:-.02em;overflow-wrap:anywhere}
 .mg-pt small{font-size:16px;font-weight:500;margin-left:4px;color:var(--ink-2,#555)}
-.mg-rank{font-weight:700;font-family:var(--f-disp,inherit)}
 .mg-star{font:700 15px var(--f-num,monospace);color:#b57a00}
 .mg-sub{font-size:13px;color:var(--ink-2,#555);margin:6px 0 0}
-.mg-meter{height:10px;border-radius:99px;background:var(--track,#dbe7f7);margin-top:10px;overflow:hidden}
-.mg-meter i{display:block;height:100%;background:var(--hi,#2a78d6);border-radius:99px}
+.mg-press{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:100%;min-height:96px;margin-top:14px;border-radius:18px;border:0;background:var(--btn,#14201f);color:var(--btn-fg,#fff);font:700 20px var(--f-disp,inherit);cursor:pointer;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+.mg-press b{font:700 24px var(--f-num,monospace)}
+.mg-press:active{transform:scale(.98)}
 .mg-fm{display:flex;flex-wrap:wrap;align-items:stretch;gap:6px;margin:6px 0 8px;font-family:var(--f-num,monospace)}
 .mg-fm .op{align-self:center;color:var(--ink-2,#555);font-weight:700}
 .mg-fm .b{background:var(--surface-2,#f3f3f3);border:1px solid var(--line,#ddd);border-radius:10px;padding:6px 10px;min-width:64px;text-align:center}
 .mg-fm .b span{display:block;font:500 11px var(--f-body,inherit);color:var(--ink-2,#555)}
 .mg-fm .b b{font-size:16px}
-.mg-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:4px 12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line,#ddd)}
+.mg-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:4px 12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line,#ddd)}
 .mg-row:last-child{border-bottom:0}
-.mg-row.own{opacity:.75}
 .mg-ic{font-size:24px;width:34px;text-align:center}
 .mg-nm{font-weight:700}
-.mg-ds{font-size:12.5px;color:var(--ink-2,#555)}
-.mg-lv{font:500 12px var(--f-num,monospace);color:var(--ink-2,#555)}
-.mg-grp{font:700 12.5px var(--f-disp,inherit);color:var(--ink-2,#555);margin:12px 0 0;letter-spacing:.04em}
+.mg-nm small{font:500 12px var(--f-num,monospace);color:var(--ink-2,#555);margin-left:6px}
+.mg-ds{font-size:12.5px;color:var(--ink-2,#555);overflow-wrap:anywhere}
 .mg-btn{min-height:42px;padding:6px 16px;border-radius:999px;border:1px solid var(--line-2,#bbb);background:var(--surface,#fff);color:inherit;font:inherit;font-weight:700;cursor:pointer;white-space:nowrap}
 .mg-btn.pri{background:var(--btn,#14201f);color:var(--btn-fg,#fff);border-color:var(--btn,#14201f)}
 .mg-btn.danger{color:var(--bad,#b42f2f);border-color:var(--bad,#b42f2f)}
 .mg-btn.danger.armed{background:var(--bad,#b42f2f);color:var(--btn-fg,#fff)}
 .mg-btn[disabled]{opacity:.45;cursor:not-allowed}
-.mg-gacha{text-align:center}
-.mg-res{min-height:96px;display:grid;place-items:center;margin:8px 0 12px}
-.mg-res .big{font-size:56px;line-height:1}
-.mg-res .tx{font-weight:700;margin-top:4px}
-.mg-tag{display:inline-block;font:700 11px/1.6 var(--f-num,monospace);padding:0 8px;border-radius:6px;color:#fff;margin-left:6px;vertical-align:middle}
-@media(prefers-reduced-motion:no-preference){.mg-res .big{animation:mgpop .35s ease-out}}
-@keyframes mgpop{from{transform:scale(.4);opacity:0}to{transform:scale(1);opacity:1}}
-.mg-col{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px}
-.mg-cell{border:1px solid var(--line-2,#bbb);border-radius:12px;padding:8px 4px;text-align:center;background:var(--surface-2,#f3f3f3);min-width:0}
-.mg-cell .i{font-size:28px;line-height:1.2}
-.mg-cell .n{font-size:11.5px;overflow-wrap:anywhere}
-.mg-cell.off{opacity:.45}
-.mg-cell .c{font:500 11px var(--f-num,monospace);color:var(--ink-2,#555)}
 .mg-log li{display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:5px 0;border-bottom:1px solid var(--line,#ddd)}
 .mg-log li:last-child{border-bottom:0}
 .mg-log ul{list-style:none;margin:0;padding:0}
-.mg-up{color:var(--ok,#006300);font-family:var(--f-num,monospace)}
 .mg-dn{color:var(--ink-2,#555);font-family:var(--f-num,monospace)}
-.mg-warn{font-size:12px;color:var(--muted,#777);margin-top:12px}
+.mg-up{color:var(--ok,#006300);font-family:var(--f-num,monospace)}
 .mg-pre ul{margin:8px 0 0;padding-left:1.2em;font-size:13px;color:var(--ink-2,#555)}
 .mg-pre li{margin:2px 0}
 `;
@@ -760,151 +672,95 @@ function h(tag,attrs){
   }
   return e;
 }
-const fmt=n=>Math.round(n).toLocaleString('ja-JP');
-const fx=n=>(Math.round(n*100)/100).toString();
-function rankOf(){
-  let i=0; RANKS.forEach((r,k)=>{if(G.total>=r[0]) i=k;});
-  const cur=RANKS[i], nxt=RANKS[i+1]||null;
-  return {name:cur[1],next:nxt,pct:nxt?(G.total-cur[0])/(nxt[0]-cur[0]):1};
-}
-let lastPull=null, armPre=false, armTimer=0;
-function gearEffect(g){
-  const a=[]; if(g.flat) a.push('固定加算 +'+g.flat); if(g.crit) a.push('大成功の確率 +'+Math.round(g.crit*100)+'%'); return a.join(' / ');
-}
-function box(label,val){return h('div',{class:'b'},h('span',{text:label}),h('b',{text:val}));}
+const box=(label,val)=>h('div',{class:'b'},h('span',{text:label}),h('b',{text:val}));
+let armPre=false, armTimer=0;
 function draw(boxEl){
-  const rk=rankOf(), owned=COLLECTION.filter(c=>G.items[c.id]).length;
-  const flat=flatBonus(), mult=multiplier(), pre=prestigeBonus(), cc=critChance();
-  const sBase=ITEM_BASE, sPts=Math.round((sBase+flat)*mult*pre);
+  const flat=flatSum(), mult=multProd(), pre=preFactor(), val=pressValue();
 
   const hero=h('div',{class:'mg-card wide'},
     h('h2',{text:'ごほうびポイント'}),
     h('div',{class:'mg-hero'},
       h('div',{class:'mg-pt'},fmt(G.points),h('small',{text:'pt'})),
-      h('div',{class:'mg-rank',text:'ランク: '+rk.name}),
-      G.stars>0?h('div',{class:'mg-star',text:'★'+G.stars+'(転生 '+G.prestiges+'回)'}):null),
-    h('div',{class:'mg-meter'},h('i',{style:'width:'+Math.round(rk.pct*100)+'%'})),
-    h('p',{class:'mg-sub',text:rk.next?'次のランク「'+rk.next[1]+'」まで あと '+fmt(rk.next[0]-G.total)+'pt(これまでの合計 '+fmt(G.total)+'pt)':'最高ランクです!(これまでの合計 '+fmt(G.total)+'pt)'}));
+      G.prestiges>0?h('div',{class:'mg-star',text:'プレステージ '+G.prestiges+'回'}):null),
+    h('p',{class:'mg-sub',text:'これまでの合計 '+fmt(G.total)+'pt ・ 1回の獲得 +'+fmt(val)+'pt。タスクの確認項目を完了すると1項目ごとに、勉強を記録すると5分ごと(最大12回分)にもらえます。'}));
 
   const formula=h('div',{class:'mg-card wide'},
     h('h2',{text:'ポイントの計算式'}),
-    h('p',{class:'mg-sub2',text:'1つのクエスト(確認項目1つ / 勉強の記録1回)のポイントは、次のすべてをかけ算したものです。'}),
     h('div',{class:'mg-fm'},
-      h('span',{class:'op',text:'('}),box('基礎値','10〜'),h('span',{class:'op',text:'+'}),box('固定加算','+'+fmt(flat)),h('span',{class:'op',text:')'}),
-      h('span',{class:'op',text:'×'}),box('倍率','×'+fx(mult)),
-      h('span',{class:'op',text:'×'}),box('転生','×'+fx(pre)),
-      h('span',{class:'op',text:'×'}),box('大成功','×1.0'+(cc>0?'/2〜5':''))),
-    h('p',{class:'mg-sub',text:'確認項目1つ = ('+sBase+' + '+flat+') × '+fx(mult)+' × '+fx(pre)+' = '+fmt(sPts)+'pt(大成功のとき '+fmt(sPts*CRIT_MIN)+'〜'+fmt(sPts*CRIT_MAX)+'pt)'}),
-    h('p',{class:'mg-sub',text:'勉強の記録(5分以上)の基礎値 = 時間(5分ごとに2)+ 量(2ごとに1・最大30)+ 集中度4以上で3。 大成功の確率: '+Math.round(cc*100)+'%'}));
+      h('span',{class:'op',text:'('}),box('基礎','10'),h('span',{class:'op',text:'+'}),box('加算','+'+fmt(flat)),h('span',{class:'op',text:')'}),
+      h('span',{class:'op',text:'×'}),box('強化の倍率(全部)','×'+fx(mult)),
+      h('span',{class:'op',text:'×'}),box('プレステージ','×'+fx(pre))),
+    h('p',{class:'mg-sub',text:'= (10 + '+fmt(flat)+') × '+fx(mult)+' × '+fx(G.pm)+'^'+fx(G.pe)+' = '+fmt(val)+'pt'}));
 
-  const gearRow=g=>{
-    const has=!!G.gear[g.id], can=!has&&G.points>=g.cost;
-    return h('div',{class:'mg-row'+(has?' own':'')},
-      h('div',{class:'mg-ic',text:g.icon}),
-      h('div',{},h('div',{class:'mg-nm',text:g.name}),h('div',{class:'mg-ds',text:gearEffect(g)})),
-      h('button',{type:'button',class:'mg-btn'+(can?' pri':''),disabled:has||!can,'aria-label':g.name+(has?'(購入済み)':'を買う'),
-        on:{click:()=>{buyGear(g.id);}}},has?'購入済み':fmt(g.cost)+'pt'));
-  };
-  const gearCard=h('div',{class:'mg-card'},h('h2',{text:'アイテム(1回きり)'}),
-    h('p',{class:'mg-sub2',text:'1つにつき1回だけ買えます。効果は転生するまでずっと続きます。'}),
-    ['施設','装備'].map(grp=>[h('div',{class:'mg-grp',text:grp}),GEAR.filter(g=>g.group===grp).map(gearRow)]));
+  const rows=FAC.map((F,i)=>{
+    const f=G.fac[i], c=capOf(f), atCap=f.lv>=c, cost=costOf(i), can=!atCap&&G.points>=cost;
+    const info='倍率 ×'+fx(f.m)+' ・ 加算 +'+fmt(flatOf(i))+(f.asc?' ・ アセンション '+f.asc+'回':'');
+    let note=null;
+    if(f.lv===0) note='Lv1にすると 加算 +'+fmt(p10(i+1))+'、倍率 +0.20';
+    else if(atCap) note='アセンション: Lv1に戻る(倍率はそのまま) ・ 加算 +'+fmt(p10(i+1))+' ・ 上限 '+c+'→'+(c+CAP_STEP)+' ・ コスト増加率 ×'+fx(f.g)+'→×'+fx(r2(f.g+G_STEP))+' ・ コストはLv'+(c/2)+'のコストから';
+    const btn=atCap
+      ?h('button',{type:'button',class:'mg-btn pri','aria-label':F.name+'をアセンションする',on:{click:()=>{ascend(i);}}},'アセンション')
+      :h('button',{type:'button',class:'mg-btn'+(can?' pri':''),disabled:!can,'aria-label':F.name+'のレベルを上げる',on:{click:()=>{buy(i);}}},fmt(cost)+'pt');
+    return h('div',{class:'mg-row'},
+      h('div',{class:'mg-ic',text:F.icon}),
+      h('div',{},h('div',{class:'mg-nm'},F.name,h('small',{text:'強化'+F.n+' ・ Lv '+f.lv+' / '+c})),
+        h('div',{class:'mg-ds',text:info}),note?h('div',{class:'mg-ds',text:note}):null),
+      btn);
+  });
+  const fac=h('div',{class:'mg-card wide'},h('h2',{text:'強化'}),
+    h('p',{class:'mg-sub2',text:'レベルを上げるたびに倍率が +0.20、コストは ×'+fx(G0)+'(アセンションごとに増加率が +0.10)。'}),rows);
 
-  const shop=h('div',{class:'mg-card'},h('h2',{text:'強化(何度でも)'}),
-    h('p',{class:'mg-sub2',text:'何回でも買えますが、買うたびに値段が上がります。転生でリセットされます。'}),
-    UPGRADES.map(u=>{
-      const lv=G.up[u.id], max=u.max||LV_CAP, maxed=lv>=max, c=upCost(u), can=!maxed&&G.points>=c;
-      const eff=u.kind==='mult'?'いま 倍率 +'+fx(u.per*lv):'いま 確率 +'+Math.round(u.per*lv*100)+'%';
-      return h('div',{class:'mg-row'},
-        h('div',{class:'mg-ic',text:u.icon}),
-        h('div',{},h('div',{class:'mg-nm',text:u.name}),h('div',{class:'mg-ds',text:u.desc}),
-          h('div',{class:'mg-lv',text:'Lv '+lv+(u.max?' / '+u.max:'')+' ・ '+eff})),
-        h('button',{type:'button',class:'mg-btn'+(can?' pri':''),disabled:!can,'aria-label':u.name+'を買う',
-          on:{click:()=>{buyUpgrade(u.id);}}},maxed?'MAX':fmt(c)+'pt'));
-    }));
-
-  const gainStars=starsReady(), nextAt=Math.pow(gainStars+1,2)*PRESTIGE_UNIT;
-  const after=1+STAR_BONUS*(G.stars+gainStars);
-  const pre_=h('div',{class:'mg-card mg-pre wide'},h('h2',{text:'転生(てんせい)'}),
-    h('p',{class:'mg-sub2',text:'ポイント・アイテム・強化をリセットして、★をもらいます。★1つにつき、ずっと続く転生ボーナスが +'+Math.round(STAR_BONUS*100)+'% 増えます。'}),
-    h('p',{class:'mg-sub',text:'今回の累計 '+fmt(G.runTotal)+'pt → もらえる★: '+gainStars+(gainStars>=1?'(転生ボーナス ×'+fx(pre)+' → ×'+fx(after)+')':'(累計 '+fmt(PRESTIGE_UNIT)+'pt から転生できます)')+'。 次の★まで あと '+fmt(Math.max(0,nextAt-G.runTotal))+'pt'}),
-    h('ul',{},h('li',{text:'リセットされる: いまのポイント、アイテム、強化'}),
-      h('li',{text:'残る: ★と転生ボーナス、ガチャのコレクション、これまでの合計とランク'}),
-      h('li',{text:'同じ確認項目や記録でポイントをもらい直すことはできません'})),
+  const pg=preGain(), e=preE();
+  const nextAt=PRE_MIN*Math.pow(10,Math.max(0,e-4));
+  const after=pg?Math.pow(G.pm*pg.pm,r2(G.pe+pg.pe)):null;
+  const pre_=h('div',{class:'mg-card mg-pre wide'},h('h2',{text:'プレステージ'}),
+    h('p',{class:'mg-sub2',text:'1e5(10万)pt以上でできます。ポイントと強化をリセットして、全体にかかる倍率(倍率^乗数)を強くします。'}),
+    h('p',{class:'mg-sub',text:'いま: ×'+fx(G.pm)+' ^ '+fx(G.pe)+' = ×'+fx(pre)}),
+    pg?h('p',{class:'mg-sub',text:'いま(e='+e+')プレステージすると: 乗数 +'+fx(pg.pe)+'、倍率 ×'+fmt(pg.pm)+' → ×'+fx(Math.pow(G.pm*pg.pm,r2(G.pe+pg.pe)))+' になります。'})
+       :h('p',{class:'mg-sub',text:'あと '+fmt(Math.max(0,PRE_MIN-G.points))+'pt でできます(いま '+fmt(G.points)+'pt)。'}),
+    h('ul',{},
+      h('li',{text:'1e5ptで 乗数+0.10・倍率×10。eが1増えるごとに 乗数は+0.10ずつ、倍率は10倍ずつ増えます。'}),
+      h('li',{text:'リセットされる: ポイント、強化のレベル・倍率・加算・アセンション'}),
+      h('li',{text:'残る: プレステージの倍率と乗数(くり返すと積み上がります)、これまでの合計'})),
     h('div',{style:'margin-top:12px'},
-      h('button',{type:'button',class:'mg-btn danger'+(armPre?' armed':''),disabled:gainStars<1,
+      h('button',{type:'button',class:'mg-btn danger'+(armPre?' armed':''),disabled:!pg,
         on:{click:()=>{
-          if(armPre){armPre=false;clearTimeout(armTimer);const r=prestige(); lastPull=null; return r;}
-          armPre=true; draw(boxEl); clearTimeout(armTimer); armTimer=setTimeout(()=>{armPre=false;if(boxEl.isConnected) draw(boxEl);},3500);
-        }}},armPre?'もう一度タップで転生する(★+'+gainStars+')':'転生する')));
-
-  const res=h('div',{class:'mg-res',role:'status','aria-live':'polite'});
-  if(lastPull){
-    const p=lastPull;
-    res.append(h('div',{},h('div',{class:'big',text:p.item.icon}),
-      h('div',{class:'tx'},p.item.name,h('span',{class:'mg-tag',style:'background:'+RARITY[p.item.r].color,text:p.item.r}),
-        p.isNew?h('span',{class:'mg-tag',style:'background:#e34948',text:'NEW'}):null),
-      p.isNew?null:h('div',{class:'mg-ds',text:'ダブり: '+p.back+'pt もどりました'})));
-  }else res.append(h('div',{class:'mg-ds',text:'ガチャを回して、コレクションを集めよう'}));
-  const gacha=h('div',{class:'mg-card mg-gacha'},h('h2',{text:'ごほうびガチャ'}),res,
-    h('button',{type:'button',class:'mg-btn pri',disabled:G.points<GACHA_COST,on:{click:()=>{lastPull=pull();}}},'1回まわす('+GACHA_COST+'pt)'),
-    h('p',{class:'mg-sub',text:'ダブりは、レア度に応じてポイントが一部もどります。コレクションは転生しても残ります。'}));
-
-  const col=h('div',{class:'mg-card'},h('h2',{text:'コレクション '+owned+' / '+COLLECTION.length}),
-    h('div',{class:'mg-col'},COLLECTION.map(c=>{
-      const k=G.items[c.id]||0;
-      return h('div',{class:'mg-cell'+(k?'':' off'),title:k?c.name:'まだ持っていません'},
-        h('div',{class:'i',text:k?c.icon:'❔'}),
-        h('div',{class:'n',text:k?c.name:'???'}),
-        h('div',{class:'c',style:k?'color:'+RARITY[c.r].color:null,text:k?c.r+(k>1?' ×'+k:''):c.r}));
-    })));
+          if(armPre){armPre=false;clearTimeout(armTimer);prestige();return;}
+          armPre=true;draw(boxEl);clearTimeout(armTimer);armTimer=setTimeout(()=>{armPre=false;if(boxEl.isConnected) draw(boxEl);},3500);
+        }}},armPre?'もう一度タップでプレステージする':'プレステージする')));
 
   const logs=G.log.slice().reverse().slice(0,10);
   const log=h('div',{class:'mg-card mg-log wide'},h('h2',{text:'さいきんの動き'}),
-    logs.length?h('ul',{},logs.map(l=>h('li',{},h('span',{text:l.t}),h('span',{class:l.d>=0?'mg-up':'mg-dn',text:(l.d>=0?'+':'')+fmt(l.d)+'pt'}))))
-      :h('p',{class:'mg-sub',text:'確認項目を完了したり、勉強を記録したりすると、ここに出ます。'}),
-    h('p',{class:'mg-warn',text:'同じ確認項目を、チェックし直してもポイントは増えません(1回だけ)。'}));
+    logs.length?h('ul',{},logs.map(l=>h('li',{},h('span',{text:l.t}),h('span',{class:l.d>0?'mg-up':'mg-dn',text:(l.d>0?'+':l.d<0?'−':'')+fmt(Math.abs(l.d))+(l.d?'pt':'')}))))
+      :h('p',{class:'mg-sub',text:'ここに、強化の購入やタスク完了の記録が出ます。'}),
+    h('p',{class:'mg-sub',text:'同じ確認項目をチェックし直しても、ポイントは増えません(1回だけ)。'}));
 
-  boxEl.replaceChildren(h('div',{class:'mg'},hero,formula,gearCard,shop,pre_,gacha,col,log));
+  boxEl.replaceChildren(h('div',{class:'mg'},hero,formula,fac,pre_,log));
 }
 function render(container){
   if(!container) return;
   injectCss();
-  const i=viewers.findIndex(v=>v.box===container);
-  if(i<0) viewers.push({box:container});
+  if(viewers.findIndex(v=>v.box===container)<0) viewers.push({box:container});
   for(let k=viewers.length-1;k>=0;k--) if(!viewers[k].box.isConnected&&viewers[k].box!==container) viewers.splice(k,1);
   draw(container);
 }
 
-/* ---------- バックアップ ---------- */
 function exportData(){return JSON.parse(JSON.stringify(G));}
 function importData(o){
-  const n=norm(o), b=G;
-  if(n.prestiges>b.prestiges){
-    G.points=n.points; G.runTotal=n.runTotal; G.up=n.up; G.gear=n.gear;
-  }else if(n.prestiges===b.prestiges){
-    G.points=Math.max(b.points,n.points); G.runTotal=Math.max(b.runTotal,n.runTotal,G.points);
-    UPGRADES.forEach(u=>{G.up[u.id]=Math.max(b.up[u.id],n.up[u.id]);});
-    GEAR.forEach(g=>{if(b.gear[g.id]||n.gear[g.id]) G.gear[g.id]=1;});
-  }
-  G.prestiges=Math.max(b.prestiges,n.prestiges); G.stars=Math.max(b.stars,n.stars);
-  G.total=Math.max(b.total,n.total,G.points); G.spent=Math.max(b.spent,n.spent);
-  G.pulls=Math.max(b.pulls,n.pulls); G.crits=Math.max(b.crits,n.crits);
-  COLLECTION.forEach(c=>{const k=Math.max(b.items[c.id]||0,n.items[c.id]||0); if(k) G.items[c.id]=k;});
-  G.awarded=[...new Set(b.awarded.concat(n.awarded))].slice(-AWARDED_MAX);
-  G.sessions=[...new Set(b.sessions.concat(n.sessions))].slice(-AWARDED_MAX);
+  const n=norm(o); if(!n) return;
+  const aw=[...new Set(G.awarded.concat(n.awarded))].slice(-AWARDED_MAX), ss=[...new Set(G.sessions.concat(n.sessions))].slice(-AWARDED_MAX);
+  if(n.total>G.total||(n.total===G.total&&n.prestiges>G.prestiges)) G=n;
+  G.awarded=aw; G.sessions=ss;
   emit({type:'import'});
 }
-function reset(){G=blank();lastPull=null;emit({type:'reset'});}
+function reset(){G=blank();emit({type:'reset'});}
 
 global.ManabiGame={
-  awardItems:awardItems,awardSession:awardSession,render:render,
-  getPoints:()=>G.points,getStars:()=>G.stars,getTotal:()=>G.total,
+  awardItems:awardItems,awardSession:awardSession,render:render,fmt:fmt,
+  getPoints:()=>G.points,getStars:()=>G.prestiges,getTotal:()=>G.total,
   onChange:fn=>{if(typeof fn==='function') listeners.push(fn);},
   exportData:exportData,importData:importData,reset:reset,
-  _buyGear:buyGear,_buyUp:buyUpgrade,_pull:pull,_prestige:prestige,
-  _calc:()=>({flat:flatBonus(),mult:multiplier(),pre:prestigeBonus(),crit:critChance(),starsReady:starsReady()}),
-  _cost:id=>upCost(UPGRADES.find(u=>u.id===id)),
-  _state:()=>G,_setRandom:fn=>{rnd=typeof fn==='function'?fn:Math.random;}
+  _press:press,_buy:buy,_asc:ascend,_pre:prestige,_state:()=>G,_value:pressValue,_cost:costOf
 };
 })(window);
 </script>
@@ -1744,8 +1600,8 @@ function bClick(e){
   else if(a==='open-add'){BD.add=el.dataset.k;BD.focus=el.dataset.f1;bRender();}
   else if(a==='close-add'){BD.add=null;bRender();}
   else if(a==='toggle-share'){BD.share=!BD.share;BD.confirm=null;bRender();}
-  else if(a==='chip'&&tk){const it=tk.items.find(x=>x.id===iid);if(it){it.done=!it.done;bCommit();if(it.done){const g=gAwardItems([{id:it.id,label:it.label}]);if(g.pts) toast('+'+g.pts+'pt'+(g.crits?' 大成功!':''));}}}
-  else if(a==='all'&&tk){const v=el.dataset.v==='1';const fresh=[];tk.items.forEach(x=>{if(v&&!x.done) fresh.push({id:x.id,label:x.label});x.done=v;});bCommit();if(fresh.length){const g=gAwardItems(fresh);if(g.pts) toast('+'+g.pts+'pt('+g.n+'件)'+(g.crits?' 大成功!':''));}}
+  else if(a==='chip'&&tk){const it=tk.items.find(x=>x.id===iid);if(it){it.done=!it.done;bCommit();if(it.done){const g=gAwardItems([{id:it.id,label:it.label}]);if(g.pts) toast('+'+ManabiGame.fmt(g.pts)+'pt');}}}
+  else if(a==='all'&&tk){const v=el.dataset.v==='1';const fresh=[];tk.items.forEach(x=>{if(v&&!x.done) fresh.push({id:x.id,label:x.label});x.done=v;});bCommit();if(fresh.length){const g=gAwardItems(fresh);if(g.pts) toast('+'+ManabiGame.fmt(g.pts)+'pt('+g.n+'件)');}}
   else if(a==='del-item'&&tk){tk.items=tk.items.filter(x=>x.id!==iid);bCommit();}
   else if(a==='clear-due'&&sb){(tk||sb).due=null;bCommit();}
   else if(a==='del-s'&&sb){bAskDel('del-s:'+sid,()=>{S.board.subjects=S.board.subjects.filter(x=>x.id!==sid);BD.edit=null;});}
@@ -1936,7 +1792,7 @@ function gAwardSession(rec){
 }
 function gameMsg(base,gs,ln){
   const pts=((gs&&gs.pts)||0)+((ln&&ln.pts)||0), crit=!!((gs&&gs.crit)||(ln&&ln.crits));
-  return pts?base+'。+'+pts+'pt'+(crit?' 大成功!':''):base;
+  return pts?base+'。+'+ManabiGame.fmt(pts)+'pt'+(crit?' 大成功!':''):base;
 }
 /* GP: ポイント獲得アニメーション中だけ、ポイント表示欄に「見せる値」を持つ。
    本当のポイントは ManabiGame が先に正しく加算していて、GP は表示だけを遅らせる。 */
@@ -1945,7 +1801,7 @@ function updateGamePill(){
   const b=$('#gamePt'); if(!b) return;
   const st=ManabiGame.getStars();
   const pts=GP?GP.shown:ManabiGame.getPoints();
-  b.replaceChildren(h('span',{text:'⭐ '+pts.toLocaleString('ja-JP')}),h('small',{text:st>0?'pt ★'+st:'pt'}));
+  b.replaceChildren(h('span',{text:'⭐ '+ManabiGame.fmt(pts)}),h('small',{text:st>0?'pt ★'+st:'pt'}));
 }
 ManabiGame.onChange(updateGamePill);
 $('#gamePt').addEventListener('click',()=>setTab('game'));
@@ -2078,7 +1934,7 @@ function saveFinish(btn){
   markTodayDone(t.subject);                   /* 今日のタスクなら完了にする */
   const me=withEff(S.sessions).find(x=>x.id===rec.id);
   S.lastResult=makeResult(rec);
-  if(gs&&gs.pts) S.lastResult.push('ごほうび +'+gs.pts+'pt'+(gs.crit?'(大成功!)':'')+'。');
+  if(gs&&gs.pts) S.lastResult.push('ごほうび +'+ManabiGame.fmt(gs.pts)+'pt'+(gs.crit?'(大成功!)':'')+'。');
   t.status='idle';t.accMs=0;t.startedAt=0;t.sessionStart=0;t.task='';T.al=0;
   S.finishing=null;FL.view='subj';FL.subj=null;
   saveStore();unlockScreen();renderTimer();renderBanner();
