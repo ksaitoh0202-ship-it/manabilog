@@ -1384,7 +1384,7 @@ function applyRoutines(list,replace){
   list.forEach(x=>{
     let tg=SUBJECTS.find(t=>normName(t.name)===normName(x.n)&&normName(t.subj||t.name)===normName(x.s));
     if(!tg){
-      if(SUBJECTS.length>=20){skipped++;return;}
+      if(SUBJECTS.length>=9999){skipped++;return;}
       tg={id:newTagId(),name:x.n,subj:x.s,unit:x.u,c:x.c||subjColor(x.s)||PRESET_COLORS[SUBJECTS.length%PRESET_COLORS.length]};
       SUBJECTS.push(tg);rebuildSubj();newTags++;
     }
