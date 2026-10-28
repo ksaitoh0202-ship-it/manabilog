@@ -2131,7 +2131,7 @@ function tagEditor(tag,onDone){
     if(!name){toast('タスクの名前を入れてください');return;}
     if(!/^#[0-9a-f]{6}$/i.test(f.c)&&!/^var\(--s[1-6]\)$/.test(f.c)){toast('色を選んでください');return;}
     if(SUBJECTS.some(x=>normName(x.name)===normName(name)&&normName(x.subj||x.name)===normName(subj)&&(!tag||x.id!==tag.id))){toast('同じ教科に同じ名前のタグがあります');return;}
-    if(!tag&&SUBJECTS.length>=99){toast('タグは99個までです');return;}
+    if(!tag&&SUBJECTS.length>=20){toast('タグは20個までです');return;}
     let t=tag;
     if(tag){tag.name=name;tag.subj=subj;tag.c=f.c;tag.unit=f.unit;}
     else{t={id:newTagId(),name:name,subj:subj,unit:f.unit,c:f.c};SUBJECTS.push(t);rebuildSubj();}
