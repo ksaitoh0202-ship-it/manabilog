@@ -429,7 +429,7 @@ th{font-weight:500;color:var(--ink-2)}
 .cardbtn::after{content:"";position:absolute;inset:0;background:var(--c);opacity:0;pointer-events:none}
 .cardbtn .sub1{font:500 12px var(--f-num);color:var(--ink-2)}
 .cardbtn.tk{min-height:84px;font-size:14.5px;padding:12px 10px 12px 14px}
-.cardbtn.blink::after{animation:blink 1s ease-in-out infinite}
+.cardbtn.blink::after{animation:blink 2s ease-in-out infinite}
 @keyframes blink{0%,100%{opacity:0}50%{opacity:.3}}
 .subjbar{--c:var(--ink);position:relative;display:flex;align-items:center;gap:10px;width:100%;min-height:60px;padding:10px 18px;border-radius:16px;border:1px solid var(--line-2);background:var(--surface);text-align:left;font-weight:700;font-size:17px;overflow:hidden;user-select:none;-webkit-user-select:none;touch-action:manipulation;transition:background-color .35s ease,color .35s ease,border-color .35s ease}
 .subjbar .sbn{flex:1;min-width:0;overflow-wrap:anywhere}
@@ -443,7 +443,9 @@ th{font-weight:500;color:var(--ink-2)}
 .dbar{position:relative;height:34px;border-radius:99px;background:var(--line);overflow:hidden}
 .dbar i{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--hi);border-radius:99px}
 @media(prefers-reduced-motion:no-preference){.dbar i{transition:width .3s linear}}
-.dbar b{position:absolute;inset:0;display:grid;place-items:center;font:700 15px var(--f-num);color:var(--ink);text-shadow:0 0 4px var(--surface),0 0 2px var(--surface)}
+.dbar b{position:absolute;inset:0;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:0 14px;font:700 15px var(--f-num);color:var(--ink);text-shadow:0 0 4px var(--surface),0 0 2px var(--surface)}
+.dbar b span:first-child{justify-self:start}
+.dbar b span:last-child{justify-self:end}
 .dlab{display:flex;justify-content:space-between;font-size:13px;color:var(--ink-2);margin-bottom:6px}
 .hint{text-align:center;font-size:12.5px;color:var(--muted)}
 .resview{display:grid;gap:22px;max-width:520px;margin-inline:auto}
@@ -477,10 +479,11 @@ th{font-weight:500;color:var(--ink-2)}
    ・プレステージ … 1e5pt以上で可能。ポイントと強化をリセット。
                     乗数 +0.10×(e-4)、倍率 ×10^(e-4)  (eは10の何乗か: 1e5→e=5)
    ・勉強の記録/確認項目 … 1回分(5分ごと・最大12回分)のポイントがもらえる(同じ項目は1回だけ)
+   ・毎日のタスクのチェック … 勉強を記録しなくても、チェックすると1回分(1日1回・タスクごと)
 
    localStorage キー manabilog.game.v2 のみ使用(旧 v1 のデータは削除)
 
-   [公開API]  awardItems(items) / awardSession(rec) / render(el) / getPoints() / getStars() / getTotal()
+   [公開API]  awardItems(items,label) / awardSession(rec) / render(el) / getPoints() / getStars() / getTotal()
               onChange(fn) / exportData() / importData(o) / reset() / fmt(n)
    ==================================================================== */
 (function(global){
@@ -582,16 +585,16 @@ function prestige(){
   emit({type:'prestige'}); return g;
 }
 
-/* ---------- 勉強・確認項目からのポイント ---------- */
-function awardItems(list){
+/* ---------- 勉強・確認項目・毎日のタスクからのポイント ---------- */
+function awardItems(list,label){
   if(!Array.isArray(list)||!list.length) return {pts:0,n:0,crits:0,parts:[]};
   const have=new Set(G.awarded); let n=0;
   list.forEach(x=>{const id=x&&typeof x.id==='string'?x.id:''; if(!id||have.has(id)) return; have.add(id); G.awarded.push(id); n++;});
   if(G.awarded.length>AWARDED_MAX) G.awarded=G.awarded.slice(-AWARDED_MAX);
   if(!n) return {pts:0,n:0,crits:0,parts:[]};
-  const pts=pressValue()*n; gain(pts); pushLog('確認項目 '+n+'件を完了',pts);
+  const pts=pressValue()*n; gain(pts); pushLog(label?String(label).slice(0,60):'確認項目 '+n+'件を完了',pts);
   emit({type:'items',pts:pts,n:n});
-  return {pts:pts,n:n,crits:0,parts:['確認項目 '+n+'件']};
+  return {pts:pts,n:n,crits:0,parts:[label?String(label):'確認項目 '+n+'件']};
 }
 function awardSession(rec){
   if(!rec||typeof rec!=='object') return {pts:0,crit:false,parts:[]};
@@ -682,7 +685,7 @@ function draw(boxEl){
     h('div',{class:'mg-hero'},
       h('div',{class:'mg-pt'},fmt(G.points),h('small',{text:'pt'})),
       G.prestiges>0?h('div',{class:'mg-star',text:'プレステージ '+G.prestiges+'回'}):null),
-    h('p',{class:'mg-sub',text:'これまでの合計 '+fmt(G.total)+'pt ・ 1回の獲得 +'+fmt(val)+'pt。タスクの確認項目を完了すると1項目ごとに、勉強を記録すると5分ごと(最大12回分)にもらえます。'}));
+    h('p',{class:'mg-sub',text:'これまでの合計 '+fmt(G.total)+'pt ・ 1回の獲得 +'+fmt(val)+'pt。タスクの確認項目を完了すると1項目ごとに、毎日のタスクにチェックすると1回分、勉強を記録すると5分ごと(最大12回分)にもらえます。'}));
 
   const formula=h('div',{class:'mg-card wide'},
     h('h2',{text:'ポイントの計算式'}),
@@ -733,7 +736,7 @@ function draw(boxEl){
   const log=h('div',{class:'mg-card mg-log wide'},h('h2',{text:'さいきんの動き'}),
     logs.length?h('ul',{},logs.map(l=>h('li',{},h('span',{text:l.t}),h('span',{class:l.d>0?'mg-up':'mg-dn',text:(l.d>0?'+':l.d<0?'−':'')+fmt(Math.abs(l.d))+(l.d?'pt':'')}))))
       :h('p',{class:'mg-sub',text:'ここに、強化の購入やタスク完了の記録が出ます。'}),
-    h('p',{class:'mg-sub',text:'同じ確認項目をチェックし直しても、ポイントは増えません(1回だけ)。'}));
+    h('p',{class:'mg-sub',text:'同じ確認項目や、同じ日の同じ毎日のタスクをチェックし直しても、ポイントは増えません(1回だけ)。'}));
 
   boxEl.replaceChildren(h('div',{class:'mg'},hero,formula,fac,pre_,log));
 }
@@ -857,6 +860,11 @@ function fmtMin(m){
   const hh=Math.floor(t/60), mm=t%60;
   return mm?hh+'時間'+mm+'分':hh+'時間';
 }
+/* 2:11 のような「時:分」表記(分は切り捨て) */
+function fmtHM(m){
+  const t=Math.max(0,Math.floor(m));
+  return Math.floor(t/60)+':'+p2(t%60);
+}
 function fmtNum(n){return Math.abs(n)>=10?String(Math.round(n)):String(Math.round(n*10)/10);}
 const sum=(a,f)=>a.reduce((t,x)=>t+f(x),0);
 
@@ -867,7 +875,7 @@ function loadStore(){
 }
 const stored=loadStore()||{};
 if(Array.isArray(stored.tags)){
-  const okTags=stored.tags.filter(validTag).slice(0,20).map(x=>({id:x.id,name:x.name.trim(),subj:(typeof x.subj==='string'&&x.subj.trim())?x.subj.trim().slice(0,20):x.name.trim(),unit:x.unit,c:x.c}));
+  const okTags=stored.tags.filter(validTag).map(x=>({id:x.id,name:x.name.trim(),subj:(typeof x.subj==='string'&&x.subj.trim())?x.subj.trim().slice(0,20):x.name.trim(),unit:x.unit,c:x.c}));
   const lgId=['ja','ma','en','sc','so','ot'],lgNm=['国語','数学','英語','理科','社会','その他'],lgUn=['ページ','問','語','ページ','ページ','ページ'];
   const isLegacyDefault=okTags.length===6&&stored.tags.every(x=>x&&x.subj==null)&&okTags.every((x,i)=>x.id===lgId[i]&&x.name===lgNm[i]&&x.unit===lgUn[i]&&x.c==='var(--s'+(i+1)+')');
   const hasReal=Array.isArray(stored.sessions)&&stored.sessions.length>0;
@@ -1255,6 +1263,12 @@ function markTodayDone(tagId){
     if(!(S.checks[k]||[]).includes(r.id)) toggleCheck(r);
   });
 }
+/* 勉強を記録しないで直接チェックしたとき: 1回分のポイント(1日1回・タスクごと) */
+function gAwardRoutine(r){
+  if(S.rsample) return {pts:0,n:0};
+  const tg=tagOf(r.subject), k=dkey(Date.now());
+  try{return ManabiGame.awardItems([{id:'rt:'+k+':'+r.id}],'今日のタスク「'+tl(tg)+(rMemo(r,tg)?'・'+rMemo(r,tg):'')+'」');}catch(e){return {pts:0,n:0};}
+}
 function startRoutine(r){
   const t=S.timer;
   if(t.status!=='idle'&&t.subject!==r.subject){toast('いまのタイマーを終えてから選んでください');return;}
@@ -1275,7 +1289,11 @@ function rtRow(r){
   return h('div',{class:'rtitem2'+(st.done?' done':''),style:'--c:'+tg.c},
     h('button',{type:'button',class:'ckb','aria-pressed':String(st.done),'aria-label':title+(st.done?'を未完了にする':'を完了にする'),on:{click:()=>{
       if(st.done&&!st.checked){toast('記録から自動で完了になっています');return;}
-      toggleCheck(r); rerenderTasksOrTimer();
+      const wasChecked=st.checked;
+      toggleCheck(r);
+      let g=null; if(!wasChecked) g=gAwardRoutine(r);
+      rerenderTasksOrTimer();
+      if(g&&g.pts) toast('チェックしました。+'+ManabiGame.fmt(g.pts)+'pt');
     }}},h('i',{},checkSvg())),
     h('button',{type:'button',class:'rtmain','aria-label':title+' のタイマーをはじめる',on:{click:()=>startRoutine(r)}},
       h('span',{class:'rtn',text:title}),h('span',{class:'rtq',text:q})));
@@ -1290,7 +1308,7 @@ function todayTasksCard(){
     return card;
   }
   if(!list.length){card.append(h('p',{class:'note',text:dateLong(now)+'は予定がありません。'}));return card;}
-  card.append(h('div',{},list.map(rtRow)),h('p',{class:'hint',style:'text-align:left;margin-top:6px',text:'行をタップすると、そのタスクのタイマーが始まります。'}));
+  card.append(h('div',{},list.map(rtRow)),h('p',{class:'hint',style:'text-align:left;margin-top:6px',text:'左の○をタップすると、勉強を記録しなくてもチェックできます(ポイントももらえます)。行をタップすると、そのタスクのタイマーが始まります。'}));
   return card;
 }
 function routineForm(r,onDone,defDays){
@@ -1384,7 +1402,6 @@ function applyRoutines(list,replace){
   list.forEach(x=>{
     let tg=SUBJECTS.find(t=>normName(t.name)===normName(x.n)&&normName(t.subj||t.name)===normName(x.s));
     if(!tg){
-      if(SUBJECTS.length>=20){skipped++;return;}
       tg={id:newTagId(),name:x.n,subj:x.s,unit:x.u,c:x.c||subjColor(x.s)||PRESET_COLORS[SUBJECTS.length%PRESET_COLORS.length]};
       SUBJECTS.push(tg);rebuildSubj();newTags++;
     }
@@ -1612,7 +1629,6 @@ function bClick(e){
     if(tm.status!=='idle'){toast('いまのタイマーを終えてから選んでください');return;}
     let tg=tagForTask(sb,tk), made=false;
     if(!tg){
-      if(SUBJECTS.length>=20){toast('タグが20個あります。使わないタグを消してから選んでください');return;}
       tg={id:newTagId(),name:tk.name.slice(0,20),subj:sb.name.slice(0,20),unit:'ページ',c:subjColor(sb.name)||PRESET_COLORS[SUBJECTS.length%PRESET_COLORS.length]};
       SUBJECTS.push(tg);rebuildSubj();afterTagChange();made=true;
     }
@@ -1905,6 +1921,12 @@ function resetTimer(){
   const t=S.timer; t.status='idle';t.accMs=0;t.startedAt=0;t.sessionStart=0;T.al=0;
   S.finishing=null;FL.view='subj';FL.subj=null;saveStore();unlockScreen();renderTimer();
 }
+/* タイマー画面から「もどる」: 計測中の時間は記録せずに捨てて、タスク一覧にもどる */
+function backFromTimer(){
+  const t=S.timer; t.status='idle';t.accMs=0;t.startedAt=0;t.sessionStart=0;t.task='';T.al=0;
+  S.finishing=null;FL.view='task';saveStore();unlockScreen();renderTimer();
+  toast('計測を捨てて、もどりました');
+}
 function openFinish(){
   const t=S.timer;
   if(t.status==='running'){t.accMs=elapsedMs();t.status='paused';unlockScreen();}
@@ -2032,7 +2054,7 @@ function decodeTags(text){
     const o=JSON.parse(decodeURIComponent(escape(atob(b))));
     if(!o||!Array.isArray(o.t)) return null;
     const out=[];
-    o.t.slice(0,40).forEach(x=>{
+    o.t.forEach(x=>{
       if(!x||typeof x!=='object') return;
       const sj=cutStr(x.s,20), nm=cutStr(x.n,20); if(!sj||!nm) return;
       out.push({s:sj,n:nm,u:UNITS.indexOf(x.u)>=0?x.u:'ページ',c:(typeof x.c==='string'&&(/^#[0-9a-f]{6}$/i.test(x.c)||/^var\(--s[1-6]\)$/.test(x.c)))?x.c:''});
@@ -2056,15 +2078,14 @@ function tagImpPreview(text){
   return d.length+'個のタスクタグ(教科'+subs.size+'つ)を読み取りました。';
 }
 function applyTags(list){
-  let added=0,had=0,skipped=0;
+  let added=0,had=0;
   list.forEach(x=>{
     if(SUBJECTS.some(t=>normName(t.name)===normName(x.n)&&normName(t.subj||t.name)===normName(x.s))){had++;return;}
-    if(SUBJECTS.length>=20){skipped++;return;}
     SUBJECTS.push({id:newTagId(),name:x.n,subj:x.s,unit:x.u,c:x.c||subjColor(x.s)||PRESET_COLORS[SUBJECTS.length%PRESET_COLORS.length]});
     rebuildSubj();added++;
   });
   if(added) afterTagChange();
-  return {added:added,had:had,skipped:skipped};
+  return {added:added,had:had};
 }
 function tagSharePanel(redraw){
   const out=h('textarea',{class:'out',id:'tg-share-out',readonly:true,rows:'6','aria-label':'共有用の文章'},tagShareText());
@@ -2080,7 +2101,7 @@ function tagSharePanel(redraw){
     if(!d){toast('取り込める共有データが見つかりません');return;}
     const r=applyTags(d);
     TSH.open=false;saveStore();renderTimer();redraw();
-    toast(r.added?r.added+'個のタスクタグを追加しました'+(r.had?'('+r.had+'個はすでにありました)':'')+(r.skipped?'。'+r.skipped+'個は20個の上限で追加できませんでした':''):(r.had?'すでに同じタスクタグがあります':'追加できませんでした(タグは20個までです)'));
+    toast(r.added?r.added+'個のタスクタグを追加しました'+(r.had?'('+r.had+'個はすでにありました)':''):'すでに同じタスクタグがあります');
   };
   return h('div',{class:'tagedit'},
     h('div',{style:'font-weight:700;font-family:var(--f-disp)',text:'タスクタグを共有する'}),
@@ -2131,7 +2152,6 @@ function tagEditor(tag,onDone){
     if(!name){toast('タスクの名前を入れてください');return;}
     if(!/^#[0-9a-f]{6}$/i.test(f.c)&&!/^var\(--s[1-6]\)$/.test(f.c)){toast('色を選んでください');return;}
     if(SUBJECTS.some(x=>normName(x.name)===normName(name)&&normName(x.subj||x.name)===normName(subj)&&(!tag||x.id!==tag.id))){toast('同じ教科に同じ名前のタグがあります');return;}
-    if(!tag&&SUBJECTS.length>=20){toast('タグは20個までです');return;}
     let t=tag;
     if(tag){tag.name=name;tag.subj=subj;tag.c=f.c;tag.unit=f.unit;}
     else{t={id:newTagId(),name:name,subj:subj,unit:f.unit,c:f.c};SUBJECTS.push(t);rebuildSubj();}
@@ -2213,11 +2233,25 @@ function subjBar(label,taskName,color,cls,onClick,aria){
       taskName?h('span',{class:'sbt',text:taskName}):null,
       h('span',{class:'sbc'},chevSvg())));
 }
+/* 今日の勉強時間の達成率バー。times=true のときは、左に今日の勉強時間・右に目標時間(例 2:11 / 2:00)を入れる */
+function paintGoalBar(g){
+  const tm=todayMin(), pct=Math.round(tm/S.goalMin*100);
+  g.fill.style.width=Math.max(0,Math.min(100,pct))+'%';
+  g.pct.textContent=pct+'%';
+  if(g.times){g.left.textContent=fmtHM(tm);g.right.textContent=fmtHM(S.goalMin);}
+  g.bar.setAttribute('aria-valuenow',String(Math.min(100,pct)));
+}
+function goalBar(times){
+  const g={times:!!times,fill:h('i'),left:h('span'),pct:h('span'),right:h('span')};
+  g.bar=h('div',{class:'dbar',role:'progressbar','aria-label':'今日の勉強時間の達成率','aria-valuemin':'0','aria-valuemax':'100'},g.fill,h('b',{},g.left,g.pct,g.right));
+  T.gb=g; paintGoalBar(g);
+  return g.bar;
+}
 function renderTimer(){
   const root=$('#p-timer'), t=S.timer;
   if(!SUBJ[t.subject]){t.subject=SUBJECTS[0].id;saveStore();}
   t.mode='up';
-  T.digits=null;T.alert=null;T.resume=null;
+  T.digits=null;T.alert=null;T.resume=null;T.gb=null;
   if(S.finishing) FL.view='result';
   else if(FL.view==='result') FL.view=(t.status==='idle')?'subj':'timer';
   if(FL.view==='timer'&&t.status==='idle') FL.view='subj';
@@ -2252,9 +2286,9 @@ function viewSubj(){
     return h('button',{type:'button',class:'cardbtn'+(pend?' blink':''),style:'--c:'+g.c,'data-k':g.k,on:{click:e=>chooseSubject(g.k,e.currentTarget)}},
       h('span',{text:g.label}),pend?h('span',{class:'sub1',text:'今日のタスク '+pend}):null);
   })));
-  const tm=todayMin(), pct=Math.round(tm/S.goalMin*100);
-  kids.push(h('div',{class:'hint'},'今日 '+fmtMin(tm)+' / 目標 '+fmtMin(S.goalMin)+'('+pct+'%)　',
-    h('button',{type:'button',class:'linkbtn',on:{click:openManage}},'せってい')));
+  /* 目標時間の達成率バー(文字は真ん中のパーセントだけ) */
+  kids.push(goalBar(false));
+  kids.push(h('div',{class:'hint'},h('button',{type:'button',class:'linkbtn',on:{click:openManage}},'せってい')));
   return h('div',{class:'flow-top fadein'},kids);
 }
 function omakase(){
@@ -2313,31 +2347,22 @@ function selectTask(id,memo){
 let tapT=0, tapTimer=0;
 function barTap(){
   const now=Date.now();
-  if(now-tapT<350){clearTimeout(tapTimer);tapT=0;openFinish();return;}   /* ダブルタップ=終了 */
+  if(now-tapT<350){clearTimeout(tapTimer);tapT=0;openFinish();return;}   /* ダブルタップ=終了して記録 */
   tapT=now; clearTimeout(tapTimer);
-  tapTimer=setTimeout(()=>{tapT=0;FL.view='task';renderTimer();},330);    /* 1回タップ=前の画面 */
+  tapTimer=setTimeout(()=>{tapT=0;backFromTimer();},330);                /* 1回タップ=計測を捨ててもどる */
 }
 function viewTimer(){
   const t=S.timer, tg=tagOf(t.subject), info=todayInfo();
   const label=String(tg.subj||tg.name), tname=normName(tg.name)===normName(label)?'':tg.name;
   T.limit=limitFor(label);
-  const bar=subjBar(label,tname,tg.c,info.reg.has(t.subject)?'col':'plain',barTap,label+' '+tg.name+'。1回タップでもどる、2回タップで終わります');
+  const bar=subjBar(label,tname,tg.c,info.reg.has(t.subject)?'col':'plain',barTap,label+' '+tg.name+'。1回タップで計測を捨ててもどる、2回タップで終わって記録します');
   T.digits=h('div',{class:'elapsed',role:'timer','aria-label':'経過時間'});
   T.state=h('div',{class:'estate'});
   T.alert=h('div',{class:'alertbox',role:'status','aria-live':'polite',hidden:true});
-  T.dl=h('span'); T.dg=h('span'); T.dfill=h('i'); T.dpct=h('b');
-  T.dbar=h('div',{class:'dbar',role:'progressbar','aria-label':'今日の勉強時間の達成率','aria-valuemin':'0','aria-valuemax':'100'},T.dfill,T.dpct);
   const kids=[bar,T.digits,T.state,T.alert,
-    h('div',{},h('div',{class:'dlab'},T.dl,T.dg),T.dbar),
-    h('p',{class:'hint',text:'教科の欄を 1回タップで もどる / 2回タップ(ダブルタップ)で 終わって記録'})];
+    goalBar(true),
+    h('p',{class:'hint',text:'教科の欄を 1回タップ=計測を捨ててもどる / 2回タップ(ダブルタップ)=終わって記録'})];
   if(t.status==='paused') kids.push(h('div',{class:'btns',style:'margin-top:0'},h('button',{type:'button',class:'btn pri',on:{click:startTimer}},'再開')));
-  kids.push(h('div',{class:'hint'},
-    h('button',{type:'button',class:'linkbtn',on:{click:openFinish}},'終わって記録する'),'　',
-    h('button',{type:'button',class:'linkbtn',on:{click:function(){
-      if(this.dataset.arm==='1'){resetTimer();return;}
-      this.dataset.arm='1';this.textContent='もう一度押すと、この時間を捨てます';
-      setTimeout(()=>{this.dataset.arm='0';this.textContent='記録せずにやめる';},3500);
-    }}},'記録せずにやめる')));
   return h('div',{class:'tview fadein'},kids);
 }
 /* ④ 結果入力(集中力・学習量・確定・キャンセルだけ) */
@@ -2357,18 +2382,13 @@ function updateTimerUI(){
   if(S.tab!=='timer') return;
   const t=S.timer, el=elapsedMs();
   if(T.resume&&T.resume.isConnected) T.resume.textContent=fmtClock(el);
+  if(T.gb&&T.gb.bar.isConnected) paintGoalBar(T.gb);
   if(!T.digits||!T.digits.isConnected) return;
-  const tm=todayMin(), pct=Math.round(tm/S.goalMin*100);
   T.digits.textContent=fmtClock(el);
   T.state.textContent=t.status==='running'?'集中中':t.status==='paused'?'一時停止中':'じゅんび';
-  T.dl.textContent='今日の勉強時間 '+fmtMin(tm);
-  T.dg.textContent='目標 '+fmtMin(S.goalMin);
-  T.dfill.style.width=Math.max(0,Math.min(100,pct))+'%';
-  T.dpct.textContent=pct+'%';
-  T.dbar.setAttribute('aria-valuenow',String(Math.min(100,pct)));
   checkLimit();
 }
-/* せってい(下から出るシート): 目標・タスクタグ・おすすめ・おしらせ */
+/* せってい(下から出るシート): 目標・タスクタグ・おしらせ */
 const MG={edit:null};
 function openManage(){
   MG.edit=null; TSH.open=false;
@@ -2392,16 +2412,13 @@ function openManage(){
         h('button',{type:'button',class:'linkbtn',on:{click:()=>{MG.edit='new';redraw();}}},'＋ タスクタグをつくる'),
         h('button',{type:'button',class:'linkbtn','aria-expanded':String(TSH.open),on:{click:()=>{TSH.open=!TSH.open;redraw();}}},'共有・取り込み')),
       TSH.open?tagSharePanel(redraw):null);
-    const idle=S.timer.status==='idle';
-    const rec=h('div',{},h('div',{class:'shl',text:'迷ったら'}),
-      idle?h('button',{type:'button',class:'btn sm',on:{click:()=>{S.rec=recommendNow();redraw();}}},'おすすめを見る'):h('p',{class:'note',text:'タイマーを終えると、おすすめが見られます。'}),
-      (idle&&S.rec)?h('div',{style:'margin-top:10px'},recCard(redraw)):null);
     const lim=h('label',{style:'display:flex;gap:10px;align-items:center;min-height:44px;font-size:14px'},
       h('input',{type:'checkbox',checked:S.limitAlert,style:'width:22px;height:22px;min-height:0;flex:none',on:{change:e=>{S.limitAlert=e.target.checked;saveStore();}}}),
       h('span',{text:'限界時間の1分前に、画面でおしらせする(音は出ません)'}));
-    return [goal,tags,rec,lim];
+    return [goal,tags,lim];
   });
 }
+
 
 function heatCard(){
   const dm=dayMap(S.sessions), today0=startOfDay(Date.now());
@@ -2877,7 +2894,7 @@ function importData(text){
     let nt=0;
     if(!Array.isArray(o)&&Array.isArray(o.tags)){
       o.tags.forEach(tg=>{
-        if(!validTag(tg)||SUBJ[tg.id]||SUBJECTS.length>=20) return;
+        if(!validTag(tg)||SUBJ[tg.id]) return;
         const isub=(typeof tg.subj==='string'&&tg.subj.trim())?tg.subj.trim().slice(0,20):tg.name.trim();
         const dup=SUBJECTS.some(x=>normName(x.name)===normName(tg.name)&&normName(x.subj||x.name)===normName(isub));
         SUBJECTS.push({id:tg.id,name:dup?tg.name.trim().slice(0,15)+'(取込)':tg.name.trim(),subj:isub,unit:tg.unit,c:tg.c});
@@ -3359,57 +3376,6 @@ function paintAlert(){
 function checkLimit(){
   const t=S.timer;
   if(t.status==='running'&&S.limitAlert&&T.limit&&T.al!==1&&T.al!==2&&elapsedMs()/60000>=T.limit.min-1){T.al=1;paintAlert();}
-}
-
-/* ---------- おすすめ学習 ---------- */
-function recommendNow(){
-  const now=new Date(), hr=now.getHours(), td=TOD.find(d=>hr>=d.lo&&hr<d.hi)||TOD[0];
-  if(S.sample) return {tod:td,list:[],pend:[],sample:true};
-  const E=withEff(S.sessions).filter(x=>{const hh=new Date(x.start).getHours();return x.eff!=null&&hh>=td.lo&&hh<td.hi;});
-  const pend=routinesOn(now.getDay()).filter(r=>SUBJ[r.subject]&&!routineState(r).done);
-  const pendSub=new Set(pend.map(r=>r.subject)), by={};
-  E.forEach(x=>{(by[x.subject]=by[x.subject]||[]).push(x);});
-  const list=Object.keys(by).filter(id=>SUBJ[id]&&by[id].length>=3).map(id=>{
-    const e=wavg(by[id]);
-    return {id:id,eff:e,n:by[id].length,pending:pendSub.has(id),score:e+(pendSub.has(id)?8:0)};
-  }).sort((a,b)=>b.score-a.score).slice(0,3);
-  return {tod:td,list:list,pend:pend,sample:false};
-}
-function pickRec(id){
-  const t=S.timer;
-  if(t.status!=='idle'){toast('いまのタイマーを終えてから選んでください');return;}
-  S.rec=null; closeSheet(); setTab('timer'); selectTask(id,'');
-  toast('タイマーを始めました');
-}
-function recCard(redraw){
-  const r=S.rec; if(!r) return null;
-  const card=h('div',{class:'recbox'},
-    h('div',{style:'display:flex;justify-content:space-between;gap:10px;align-items:baseline'},
-      h('b',{style:'font-family:var(--f-disp)',text:'いまのおすすめ'}),
-      h('button',{type:'button',class:'linkbtn',on:{click:()=>{S.rec=null;redraw();}}},'閉じる')));
-  if(r.sample){card.append(h('p',{class:'note',text:'いまはサンプルのデータです。自分の記録がたまると、おすすめが出ます。'}));return card;}
-  if(r.list.length) card.append(h('p',{class:'note',text:r.tod.name+'に始めた、これまでの記録から選びました。'}));
-  r.list.forEach(it=>{
-    const tg=tagOf(it.id), d=Math.round(it.eff-100);
-    card.append(h('div',{class:'recrow'},
-      h('div',{},h('div',{class:'rtt'},h('i',{style:'background:'+tg.c}),h('span',{text:tl(tg)})),
-        h('div',{class:'rtm',text:r.tod.name+'の'+tg.name+'は、いつものペースより '+(d>=0?'+':'−')+Math.abs(d)+'%('+it.n+'回)'+(it.pending?'・今日の予定にもあります':'')})),
-      h('button',{type:'button',class:'btn sm',on:{click:()=>pickRec(it.id)}},'これにする')));
-  });
-  const shown=new Set(r.list.map(x=>x.id)), more=r.pend.filter(x=>!shown.has(x.subject)).slice(0,Math.max(0,3-r.list.length));
-  if(more.length){
-    card.append(h('p',{class:'note',style:'margin-top:8px',text:'今日の予定で、まだのもの'}));
-    more.forEach(x=>{
-      const tg=tagOf(x.subject), mm=rMemo(x,tg);
-      card.append(h('div',{class:'recrow'},
-        h('div',{},h('div',{class:'rtt'},h('i',{style:'background:'+tg.c}),h('span',{text:tl(tg)+(mm?'・'+mm:'')})),
-          h('div',{class:'rtm',text:x.min>0?'目標 '+x.min+'分':'時間の目標なし'})),
-        h('button',{type:'button',class:'btn sm',on:{click:()=>{S.rec=null;closeSheet();startRoutine(x);}}},'これにする')));
-    });
-  }
-  if(!r.list.length&&!more.length) card.append(h('p',{class:'note',text:'この時間帯の記録がまだ足りません。同じ教科で、量を入れた記録が3回以上たまると、おすすめが出ます。'}));
-  else if(!r.list.length) card.append(h('p',{class:'note',style:'margin-top:6px',text:'この時間帯の記録は、まだ足りません。(同じ教科で3回以上)'}));
-  return card;
 }
 
 function renderStats(){
